@@ -77,3 +77,4 @@ This project is licensed under the MIT License. See the LICENSE file for details
 
 · ianlucas for the original cs2-css-inventory-simulator which served as the foundation.
 · ed0ard for the BotRandomizer which provided inspiration for the approach to bot-only skin assignment.
+<img width="1280" height="1024" alt="20B2CD~1" src="https://github.com/user-attachments/assets/f6da11f4-51be-4ee7-8a29-8d7c85b12809" />
