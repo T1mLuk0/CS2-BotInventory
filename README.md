@@ -57,8 +57,8 @@ This makes the project ideal for a server admin who wants a rich visual experien
  Installation
 
 1. Ensure all Requirements are correctly installed on your CS2 server.
-2. Download the latest BotInventorySimulator.dll from the Releases page.
-3. Place the .dll file into your server's csgo/addons/counterstrikesharp/plugins/BotInventorySimulator/ directory.
+2. Download the latest BotInventory.dll from the Releases page.
+3. Place the .dll file into your server's csgo/addons/counterstrikesharp/plugins/BotInventory/ directory.
 4. Start or restart your CS2 server.
 
  Usage
