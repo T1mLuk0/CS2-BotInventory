@@ -28,6 +28,7 @@ public partial class InventorySimulator : BasePlugin
     {
         CSS.Initialize(this);
         ConVars.Initialize(this);
+        InitBotExtras();//add
         RegisterListener<Listeners.OnEntityCreated>(OnEntityCreated);
         RegisterListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
         RegisterEventHandler<EventPlayerConnect>(OnPlayerConnect, HookMode.Post);
