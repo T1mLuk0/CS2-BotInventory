@@ -17,15 +17,17 @@ User Responsibility
 
 YOU, AND YOU ALONE, ASSUME ALL RISKS. The author assumes no liability for any account restrictions, VAC bans, GSLT bans, or any other penalties imposed by Valve Corporation. It is your responsibility to understand the consequences of violating the official server guidelines. It is strongly recommended to operate this plugin only on private, offline, or non-commercial servers, and to set the FollowCS2ServerGuidelines to false.
 
- Key Features
+ New Feature: Full-Coverage Cosmetics & StatTrak System
 
-· Bot-Only Inventory Replacement: Seamlessly replaces the local inventory of all AI-controlled bots with a random, procedurally generated set of items. Real players remain completely unaffected and will continue to see their own authentic Steam inventories (unless overridden by the base inventory-simulator plugin, see note below).
-· No External Dependencies: The plugin uses a hard-coded, extensive database of skin, knife, glove, and sticker IDs. No MySQL, no SQLite, no web server, no API calls. It is entirely self-contained.
-· Extensive Randomization:
-  · Weapon Skins: Randomized for all major weapons from a curated list of thousands of valid paint kits.
-  · Knives & Gloves: Bots are randomly assigned high-quality knives (Karambit, Butterfly, etc.) and gloves from a built-in pool of valid item definitions and paint kits.
-  · Stickers: Supports advanced sticker placement, including a "triple sticker" feature, where three identical stickers are automatically placed on adjacent slots (with optional random stickers on remaining slots).
-· No Player Inventory Impact: Real players' Steam inventories are isolated and preserved. They will see their own skins unless the original cs2-css-inventory-simulator's client-side features (!ws, etc.) are also active (see below).
+This enhancement module brings richer personalization to your bot inventory simulator, now covering every player (bots and real humans) on the server with fully automated, configurable decorations.
+
+·  Random Music Kits – Every player (including bots) will be assigned a random music kit on MVP or spawn, creating an immersive atmosphere.
+·  Random Agent Models – Supports separate random agent skin assignments for CT and T sides, making bots visually diverse.
+·  StatTrak™ Counters – All weapon skins can come with random StatTrak counters, adding a tangible feel to every kill.
+·  Auto-Generated Configuration – On first run, plugin generates config.json with all toggles and probability settings (music pool, agent lists, StatTrak chance), no manual editing required.
+·  Full Player Coverage – Both bots and real players benefit from these random assignments, enhancing overall gameplay variety.(GSLT WARNING)
+
+This feature runs independently, integrates seamlessly with the existing inventory system, and requires no additional dependencies—just drop and play.
 
  Important Configuration (CounterStrikeSharp)
 
@@ -68,6 +70,7 @@ No console commands are required for the core functionality. The plugin activate
 · Automatic Bot Inventory: As soon as a bot spawns, it will be assigned a full random inventory.
 · Verification: You should see log output in your server console confirming that an inventory has been generated for bots.
 · Bypass for Yourself: Use the standard !ws command from the base cs2-css-inventory-simulator to load your personal inventory from the web service. This will override the bot-only random assignment for your player only.
+. You can find a Json profile with the path "\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\csgo\addons\counterstrikesharp\configs\plugins\Botinventory\BotInventory.json" which be a cosmetic configuration allow you to define the style
 
  License
 
