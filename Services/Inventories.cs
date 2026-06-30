@@ -26,9 +26,16 @@ public static class Inventories
     private static readonly object _randomLock = new();
     private static ulong? _hostSteamId = null;
 
-    private static bool IsBotPlayer(CCSPlayerController? c)
-        => c != null && (c.IsBot || (_botHiderApi?.IsManagedBot(c.Slot) ?? false));
+private static bool IsBotPlayer(CCSPlayerController? c)
+{
+    if (c == null)
+        return false;
 
+    if (c.IsBot || (_botHiderApi?.IsManagedBot(c.Slot) ?? false))
+        return true;
+
+    return ShouldApplyToPlayers();
+}
     // BotInventory JSON config
     // address: addons/counterstrikesharp/configs/plugins/Botinventory/BotInventory.json
     private const string BOT_INVENTORY_CONFIG_FILE = "BotInventory.json";
@@ -44,6 +51,7 @@ public static class Inventories
 
     private sealed class BotInventoryConfig
     {
+        public bool ApplyToPlayers { get; set; } = false;
         public WeaponSkinConfig Weapons { get; set; } = new();
         public KnifeSkinSection Knives { get; set; } = new();
         // These sections are used by InventorySimulator.BotExtras.cs.
@@ -153,6 +161,8 @@ public static class Inventories
     {
         return new BotInventoryConfig
         {
+            ApplyToPlayers = false,
+            
             Weapons = new WeaponSkinConfig
             {
                 Enabled = true,
@@ -358,7 +368,7 @@ public static class Inventories
                     ["64"] = new[] { 12, 123, 522, 595, 683, 701, 721, 843, 892, 952, 1047, 1145, 1232 },
                     ["11"] = new[] { 195, 229, 382, 493, 511, 545, 606, 628, 677, 712, 806, 891, 980, 1095, 1129 },
                 }
-            }
+            }            
         };
     }
 
@@ -618,6 +628,12 @@ public static class Inventories
         return statTrak.CounterPool[_random.Next(statTrak.CounterPool.Length)];
     }
 
+    public static bool ShouldApplyToPlayers()
+    {
+        EnsureBotInventoryConfigLoaded();
+        return _botInventoryConfig.ApplyToPlayers;
+    }
+
     public static bool TryGetRandomBotGlove(Random rng, out BotGloveSkin glove)
     {
         EnsureBotInventoryConfigLoaded();
@@ -733,25 +749,25 @@ public static class Inventories
         return false;
     }
 
-    public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInventory inventory, CCSPlayerController? player = null)
+public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInventory inventory, CCSPlayerController? player = null)
+{
+    inventory = null;
+    if (IsHost(steamId))
+        return false;
+    if (!IsBotPlayer(player))
+        return false;
+
+    try
     {
-        if (IsHost(steamId))
-        {
-            inventory = null;
-            return false;
-        }
-        try
-        {
-            inventory = GenerateHighTierRandomInventory(steamId);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            CSS.Plugin.Logger.LogError($"Failed to generate random inventory for {steamId}: {ex.Message}");
-            inventory = null;
-            return false;
-        }
+        inventory = GenerateHighTierRandomInventory(steamId);
+        return true;
     }
+    catch (Exception ex)
+    {
+        CSS.Plugin.Logger.LogError($"Failed to generate random inventory for {steamId}: {ex.Message}");
+        return false;
+    }
+}
 
     public static PlayerInventory? Get(ulong steamId)
     {
@@ -864,20 +880,56 @@ public static class Inventories
                     .ToArray();
                 if (enabledKnives.Length > 0)
                 {
-                    var selectedKnife = enabledKnives[_random.Next(enabledKnives.Length)];
-                    int knifePaint = selectedKnife.PaintKits[_random.Next(selectedKnife.PaintKits.Length)];
-                    var knifeItem = new InventoryItem
+                    var selectedKnifeCT = enabledKnives[_random.Next(enabledKnives.Length)];
+                    int knifePaintCT = selectedKnifeCT.PaintKits[_random.Next(selectedKnifeCT.PaintKits.Length)];
+
+                    var ctKnifeItem = new InventoryItem
                     {
-                        Def = (ushort)selectedKnife.Def,
-                        Paint = knifePaint,
+                        Def = (ushort)selectedKnifeCT.Def,
+                        Paint = knifePaintCT,
                         Wear = RandomWear(_botInventoryConfig.Knives.MaxWear),
                         Seed = _random.Next(1, 10000),
                     };
-                    data.Knives[TEAM_CT] = knifeItem;
-                    data.Knives[TEAM_T] = knifeItem;
-                    CSS.Plugin.Logger.LogInformation($"生成 BOT 刀: {selectedKnife.Name}, Def={selectedKnife.Def}, Paint={knifePaint}");
+
+                    var selectedKnifeT = enabledKnives[_random.Next(enabledKnives.Length)];
+                    int knifePaintT = selectedKnifeT.PaintKits[_random.Next(selectedKnifeT.PaintKits.Length)];
+
+                    var tKnifeItem = new InventoryItem
+                    {
+                        Def = (ushort)selectedKnifeT.Def,
+                        Paint = knifePaintT,
+                        Wear = RandomWear(_botInventoryConfig.Knives.MaxWear),
+                        Seed = _random.Next(1, 10000),
+                    };
+
+                    data.Knives[TEAM_CT] = ctKnifeItem;
+                    data.Knives[TEAM_T] = tKnifeItem;
+                    CSS.Plugin.Logger.LogInformation($"生成 T 刀: {selectedKnifeT.Name}, Def={selectedKnifeT.Def}, Paint={knifePaintT}");
                 }
             }
+            if (_botInventoryConfig.Gloves.Enabled)
+            {
+                var enabledGloves = _botInventoryConfig.Gloves.Items
+                    .Where(g => g.Enabled && g.Def > 0 && g.Paint >= 0)
+                    .ToArray();
+
+                if (enabledGloves.Length > 0)
+                {
+                    var selectedGlove = enabledGloves[_random.Next(enabledGloves.Length)];
+                    var gloveItem = new InventoryItem
+                    {
+                        Def = (ushort)selectedGlove.Def,
+                        Paint = selectedGlove.Paint,
+                        Wear = RandomWear(_botInventoryConfig.Gloves.MaxWear),
+                        Seed = _random.Next(
+                            _botInventoryConfig.Gloves.MinSeed,
+                            _botInventoryConfig.Gloves.MaxSeed + 1
+                        )
+                    };
+                    data.Gloves[TEAM_CT] = gloveItem;
+                    data.Gloves[TEAM_T] = gloveItem;
+                }
+            }                                  
             if (_botInventoryConfig.Agents.Enabled)
             {
                 double agentChance = Math.Clamp(_botInventoryConfig.Agents.Chance, 0.0, 1.0);

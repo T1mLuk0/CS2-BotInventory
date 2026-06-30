@@ -16,10 +16,20 @@ public static class CCSPlayerControllerExtensions
         CCSPlayerControllerState
     > _controllerStateManager = [];
 
-    public static CCSPlayerControllerState GetState(this CCSPlayerController self)
+public static CCSPlayerControllerState GetState(this CCSPlayerController self)
+{
+    return _controllerStateManager.GetOrAdd(self.Index, _ =>
     {
-        return _controllerStateManager.GetOrAdd(self.Index, _ => new(self.SteamID));
-    }
+        var state = new CCSPlayerControllerState(self.SteamID);
+
+        if (!self.IsBot && !Inventories.ShouldApplyToPlayers())
+        {
+            state.Inventory = null;
+        }
+
+        return state;
+    });
+}
 
     public static void Revalidate(this CCSPlayerController self)
     {
