@@ -153,7 +153,8 @@ private static bool IsBotPlayer(CCSPlayerController? c)
     {
         public bool Enabled { get; set; } = true;
         public double Chance { get; set; } = 0.8;
-        public int[] CounterPool { get; set; } = new[] { 426, 888, 69, 420, 777, 1337, 3456, 7410, 369 };
+        public int CounterMin { get; set; } = 1;
+        public int CounterMax { get; set; } = 10001;
         public Dictionary<string, int[]> WeaponPaints { get; set; } = new();
     }
 
@@ -330,7 +331,8 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             {
                 Enabled = true,
                 Chance = 0.8,
-                CounterPool = new[] { 426, 888, 69, 420, 777, 1337, 3456, 7410, 369 },
+                CounterMin = 1,
+                CounterMax = 10001,
                 WeaponPaints = new Dictionary<string, int[]>
                 {
                     ["61"] = new[] { 60, 115, 183, 217, 221, 277, 290, 313, 339, 489, 504, 540, 637, 653, 657, 705, 817, 991, 1040, 1102, 1136, 1142, 1173, 1186, 1431 },
@@ -595,7 +597,6 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         _botInventoryConfig.Agents ??= new AgentSkinConfig();
         _botInventoryConfig.Stickers ??= new StickerSkinConfig();
         _botInventoryConfig.StatTrak ??= new StatTrakSkinConfig();
-        _botInventoryConfig.StatTrak.CounterPool ??= Array.Empty<int>();
         _botInventoryConfig.StatTrak.WeaponPaints ??= new Dictionary<string, int[]>();
     }
 
@@ -616,16 +617,22 @@ private static bool IsBotPlayer(CCSPlayerController? c)
     {
         EnsureBotInventoryConfigLoaded();
         var statTrak = _botInventoryConfig.StatTrak;
+
         if (!statTrak.Enabled)
             return null;
+
         if (!ContainsPaintKit(statTrak.WeaponPaints, defIndex, paintKit))
             return null;
-        if (statTrak.CounterPool.Length == 0)
-            return null;
+
         double chance = Math.Clamp(statTrak.Chance, 0.0, 1.0);
+
         if (_random.NextDouble() > chance)
             return null;
-        return statTrak.CounterPool[_random.Next(statTrak.CounterPool.Length)];
+
+        int min = Math.Min(statTrak.CounterMin, statTrak.CounterMax);
+        int max = Math.Max(statTrak.CounterMin, statTrak.CounterMax);
+
+        return _random.Next(min, max + 1);
     }
 
     public static bool ShouldApplyToPlayers()
