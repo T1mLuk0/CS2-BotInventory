@@ -14,135 +14,14 @@ public partial class InventorySimulator
 
     private readonly Dictionary<int, string> _botExtraModels = new();
     private readonly Dictionary<int, int> _botExtraKits = new();
-    private readonly Dictionary<int, int> _botExtraGloves = new();
+    private readonly Dictionary<int, Inventories.BotGloveSkin> _botExtraGloves = new();
     private readonly Dictionary<int, int> _botExtraGloveSeeds = new();
     private readonly Dictionary<int, float> _botExtraGloveWears = new();
 
     private MemoryFunctionVoid<nint, string, float>? _setAttrByName;
     private ulong _nextBotExtraItemId = 0xF00DCAFE;
     private bool _handlingBotExtraMvp = false;
-
-    private static readonly (ushort DefIndex, int PaintKit, string Name)[] HighValueGloves =
-    {
-    // Sport Gloves
-    (5030, 10048, "Sport Gloves | Vice"), // Vice
-    (5030, 1407, "Sport Gloves | Big Game"),  // Big Game
-    (5030, 1406, "Sport Gloves | Nocts"),  // Nocts
-    (5030, 10038, "Sport Gloves | Hedge Maze"), // Hedge Maze
-    (5030, 1405, "Sport Gloves | Scarlet Shamagh"), // Scarlet Shamagh
-    (5030, 1417, "Sport Gloves | Bronze Morph"),  // Bronze Morph
-    (5030, 10045, "Sport Gloves | Amphibious"), // Amphibious 
-    (5030, 10037, "Sport Gloves | Pandora's Box"), // Pandora's Box
-    (5030, 1410, "Sport Gloves | Omega"), // Omega
-    (5030, 10073, "Sport Gloves | Slingshot"), // Slingshot
-    (5030, 10018, "Sport Gloves | Superconductor"), // Superconductor    
-    (5030, 10076, "Sport Gloves | Nocts"), // Nocts
-    (5030, 10047, "Sport Gloves | Omega"), // Omega
-    (5030, 10075, "Sport Gloves | Scarlet Shamagh"), // Scarlet Shamagh
-    (5030, 10074, "Sport Gloves | Big Game"), // Big Game
-    (5030, 10046, "Sport Gloves | Bronze Morph"), // Bronze Morph
-    (5030, 1408, "Sport Gloves | Creme Pinstripe"), // Creme Pinstripe
-    (5030, 1409, "Sport Gloves | Red Racer"), // Red Racer
-    (5030, 10019, "Sport Gloves | Arid"), // Arid
-
-    // Moto Gloves
-    (5033, 10026, "Moto Gloves | Spearmint"), // Spearmint
-    (5033, 10078, "Moto Gloves | Smoke Out"), // Smoke Out
-    (5033, 10052, "Moto Gloves | Polygon"), // Polygon
-    (5033, 10079, "Moto Gloves | Blood Pressure"), // Blood Pressure
-    (5033, 10049, "Moto Gloves | POW!"), // POW!
-    (5033, 10051, "Moto Gloves | Transport"), // Transport
-    (5033, 10050, "Moto Gloves | Turtle"), // Turtle
-    (5033, 10077, "Moto Gloves | Finish Line"), // Finish Line
-    (5033, 10080, "Moto Gloves | 3rd Commando Company"), // 3rd Commando Company
-    (5033, 10028, "Moto Gloves | Cool Mint"), // Cool Mint
-    (5033, 10024, "Moto Gloves | Eclipse"), // Eclipse
-    (5033, 10027, "Moto Gloves | Boom!"), // Boom!
-
-    // Specialist Gloves
-    (5034, 10033, "Specialist Gloves | Crimson Kimono"), // Crimson Kimono
-    (5034, 10034, "Specialist Gloves | Emerald Web"), // Emerald Web
-    (5034, 1413, "Specialist Gloves | Marble Fade"),  // Marble Fade
-    (5034, 1438, "Specialist Gloves | Pillow Punchers"),  // Pillow Punchers
-    (5034, 1416, "Specialist Gloves | Tiger Strike"),  // Tiger Strike
-    (5034, 10061, "Specialist Gloves | Crimson Web"), // Crimson Web
-    (5034, 1440, "Specialist Gloves | Cloud Chaser"), // Cloud Chaser
-    (5034, 1437, "Specialist Gloves | Big Swell"), // Big Swell
-    (5034, 10063, "Specialist Gloves | Fade"), // Fade
-    (5034, 1414, "Specialist Gloves | Blackbook"), // Blackbook
-    (5034, 10065, "Specialist Gloves | Marble Fade"), // Marble Fade
-    (5034, 10064, "Specialist Gloves | Mogul"), // Mogul
-    (5034, 10068, "Specialist Gloves | Field Agent"), // Field Agent
-    (5034, 1415, "Specialist Gloves | Chocolate Chesterfield"), // Chocolate Chesterfield
-    (5034, 10067, "Specialist Gloves | Tiger Strike"), // Tiger Strike
-    (5034, 10066, "Specialist Gloves | Lt. Commander"), // Lt. Commander
-    (5034, 10062, "Specialist Gloves | Buckshot"), // Buckshot
-    (5034, 10030, "Specialist Gloves | Forest DDPAT"), // Forest DDPAT
-    (5034, 10035, "Specialist Gloves | Foundation"), // Foundation
-
-    // Driver Gloves
-    (5031, 1399, "Driver Gloves | Rezan the Red"),  // Rezan the Red
-    (5031, 10016, "Driver Gloves | Crimson Weave"), // Crimson Weave
-    (5031, 1401, "Driver Gloves | Imperial Plaid"), // Imperial Plaid
-    (5031, 10041, "Driver Gloves | King Snake"), // King Snake
-    (5031, 1398, "Driver Gloves | Wave Chaser"),  // Wave Chaser
-    (5031, 10070, "Driver Gloves | Snow Leopard"), // Snow Leopard
-    (5031, 10042, "Driver Gloves | Imperial Plaid"), // Imperial Plaid
-    (5031, 10072, "Driver Gloves | Black Tie"), // Black Tie
-    (5031, 1400, "Driver Gloves | Brocade Flowers"), // Brocade Flowers
-    (5031, 1404, "Driver Gloves | Seigaiha"), // Seigaiha
-    (5031, 1402, "Driver Gloves | Garden"), // Garden
-    (5031, 1439, "Driver Gloves | Hand Sweaters"), // Hand Sweaters
-    (5031, 10071, "Driver Gloves | Queen Jaguar"), // Queen Jaguar
-    (5031, 1412, "Driver Gloves | Plum Quill"), // Plum Quill
-    (5031, 10069, "Driver Gloves | Rezan the Red"), // Rezan the Red
-    (5031, 10043, "Driver Gloves | Overtake"), // Overtake
-    (5031, 10044, "Driver Gloves | Racing Green"), // Racing Green
-    (5031, 10013, "Driver Gloves | Lunar Weave"), // Lunar Weave
-    (5031, 10015, "Driver Gloves | Convoy"), // Convoy
-    (5031, 10040, "Driver Gloves | Diamondback"), // Diamondback
-    };
-    
-      
-
-    private static readonly int[] HighValueMusicKits =
-    {
-        2, 3, 4, 5, 6, 7, 8, 9, 10,
-        14, 15, 16, 17, 18, 19, 20,
-        22, 23, 24, 25, 26, 27, 28,
-        32, 33, 34, 35, 36, 37, 38,
-        39, 40, 41, 42, 43, 44, 45,
-    };
-
-    private static readonly string[] CtModels =
-    {
-        "agents\\models\\ctm_sas\\ctm_sas_variantf.vmdl",
-        "agents\\models\\ctm_sas\\ctm_sas_variantg.vmdl",
-        "agents\\models\\ctm_st6\\ctm_st6_variantg.vmdl",
-        "agents\\models\\ctm_st6\\ctm_st6_varianti.vmdl",
-        "agents\\models\\ctm_st6\\ctm_st6_variantj.vmdl",
-        "agents\\models\\ctm_st6\\ctm_st6_variantk.vmdl",
-        "agents\\models\\ctm_fbi\\ctm_fbi_variantf.vmdl",
-        "agents\\models\\ctm_fbi\\ctm_fbi_variantg.vmdl",
-        "agents\\models\\ctm_swat\\ctm_swat_variantj.vmdl",
-        "agents\\models\\ctm_gendarmerie\\ctm_gendarmerie_variante.vmdl",
-    };
-
-    private static readonly string[] TModels =
-    {
-        "agents\\models\\tm_professional\\tm_professional_varf.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varf1.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varf2.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varf3.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varf4.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varf5.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varg.vmdl",
-        "agents\\models\\tm_professional\\tm_professional_varh.vmdl",
-        "agents\\models\\tm_jungle_raider\\tm_jungle_raider_variantf.vmdl",
-        "agents\\models\\tm_leet\\tm_leet_varianti.vmdl",
-    };
-
-    private void InitBotExtras()
+private void InitBotExtras()
     {
         try
         {
@@ -165,10 +44,10 @@ public partial class InventorySimulator
             _botExtraGloveSeeds.Clear();
             _botExtraGloveWears.Clear();
 
-            foreach (var model in CtModels)
+            foreach (var model in Inventories.GetBotCtModels())
                 Server.PrecacheModel(model);
 
-            foreach (var model in TModels)
+            foreach (var model in Inventories.GetBotTModels())
                 Server.PrecacheModel(model);
         });
 
@@ -198,29 +77,61 @@ public partial class InventorySimulator
 
         if (!_botExtraModels.TryGetValue(slot, out string? model))
         {
-            string[] modelPool = (CsTeam)player.TeamNum == CsTeam.CounterTerrorist ? CtModels : TModels;
-            model = modelPool[_botExtraRng.Next(modelPool.Length)];
-            _botExtraModels[slot] = model;
+            string[] modelPool = (CsTeam)player.TeamNum == CsTeam.CounterTerrorist
+                ? Inventories.GetBotCtModels()
+                : Inventories.GetBotTModels();
+
+            if (modelPool.Length > 0)
+            {
+                model = modelPool[_botExtraRng.Next(modelPool.Length)];
+                _botExtraModels[slot] = model;
+            }
+            else
+            {
+                model = string.Empty;
+            }
         }
 
-        if (!_botExtraKits.ContainsKey(slot))
-            _botExtraKits[slot] = HighValueMusicKits[_botExtraRng.Next(HighValueMusicKits.Length)];
+        if (!_botExtraKits.ContainsKey(slot)
+            && Inventories.TryGetRandomBotMusicKit(_botExtraRng, out int selectedMusicKit))
+        {
+            _botExtraKits[slot] = selectedMusicKit;
+        }
 
-        if (!_botExtraGloves.ContainsKey(slot))
-            _botExtraGloves[slot] = _botExtraRng.Next(HighValueGloves.Length);
+        if (!_botExtraGloves.ContainsKey(slot)
+            && Inventories.TryGetRandomBotGlove(_botExtraRng, out var selectedGlove))
+        {
+            _botExtraGloves[slot] = selectedGlove;
+        }
 
-        if (!_botExtraGloveSeeds.ContainsKey(slot))
-            _botExtraGloveSeeds[slot] = _botExtraRng.Next(1, 10000);
+        int slotSeed = 0;
+        float slotWear = 0.0f;
 
-        if (!_botExtraGloveWears.ContainsKey(slot))
-            _botExtraGloveWears[slot] = (float)(_botExtraRng.NextDouble() * 0.06);
+        if (_botExtraGloves.ContainsKey(slot))
+        {
+            if (!_botExtraGloveSeeds.ContainsKey(slot))
+                _botExtraGloveSeeds[slot] = Inventories.CreateBotGloveSeed(_botExtraRng);
+
+            if (!_botExtraGloveWears.ContainsKey(slot))
+                _botExtraGloveWears[slot] = Inventories.CreateBotGloveWear(_botExtraRng);
+
+            slotSeed = _botExtraGloveSeeds[slot];
+            slotWear = _botExtraGloveWears[slot];
+        }
 
         var pawn = player.PlayerPawn.Value;
-        var assignedModel = model;
-        var musicKitId = _botExtraKits[slot];
-        var glove = HighValueGloves[_botExtraGloves[slot]];
-        var gloveSeed = _botExtraGloveSeeds[slot];
-        var gloveWear = _botExtraGloveWears[slot];
+        var assignedModel = model ?? string.Empty;
+
+        int? musicKitId = _botExtraKits.TryGetValue(slot, out int kitId)
+            ? kitId
+            : null;
+
+        Inventories.BotGloveSkin? glove = null;
+        if (_botExtraGloves.TryGetValue(slot, out var cachedGlove))
+            glove = cachedGlove;
+
+        var gloveSeed = slotSeed;
+        var gloveWear = slotWear;
 
         Server.NextFrame(() =>
         {
@@ -230,31 +141,41 @@ public partial class InventorySimulator
             if (pawn == null || !pawn.IsValid)
                 return;
 
-            pawn.SetModel(assignedModel);
-            Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
-
-            var c = pawn.Render;
-            pawn.Render = Color.FromArgb(255, c.R, c.G, c.B);
-            Utilities.SetStateChanged(pawn, "CBaseModelEntity", "m_clrRender");
-
-            player.MusicKitID = musicKitId;
-            Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitID");
-
-            ApplyBotInventoryGloves(player, pawn, glove.DefIndex, glove.PaintKit, gloveSeed, gloveWear);
-
-            AddTimer(0.10f, () =>
+            if (!string.IsNullOrWhiteSpace(assignedModel))
             {
-                if (IsBotInventoryTarget(player) && pawn.IsValid)
-                    ApplyBotInventoryGloves(player, pawn, glove.DefIndex, glove.PaintKit, gloveSeed, gloveWear);
-            });
+                pawn.SetModel(assignedModel);
+                Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
 
-            AddTimer(0.25f, () =>
+                var c = pawn.Render;
+                pawn.Render = Color.FromArgb(255, c.R, c.G, c.B);
+                Utilities.SetStateChanged(pawn, "CBaseModelEntity", "m_clrRender");
+            }
+
+            if (musicKitId.HasValue)
             {
-                if (IsBotInventoryTarget(player) && pawn.IsValid)
-                    ApplyBotInventoryGloves(player, pawn, glove.DefIndex, glove.PaintKit, gloveSeed, gloveWear);
-            });
+                player.MusicKitID = musicKitId.Value;
+                Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitID");
+            }
 
-            Logger.LogInformation($"[BotInventory] Bot extras: slot={slot}, music={musicKitId}, glove={glove.Name}, seed={gloveSeed}, wear={gloveWear:0.0000}");
+            if (glove.HasValue)
+            {
+                var selectedGlove = glove.Value;
+                Server.NextFrame(() =>
+                {
+                    if (!IsBotInventoryTarget(player) || !pawn.IsValid) return;
+                    ApplyBotInventoryGloves(player, pawn, selectedGlove.DefIndex, selectedGlove.PaintKit, gloveSeed, gloveWear);
+                    Server.NextFrame(() =>
+                    {
+                        if (IsBotInventoryTarget(player) && pawn.IsValid)
+                            ApplyBotInventoryGloves(player, pawn, selectedGlove.DefIndex, selectedGlove.PaintKit, gloveSeed, gloveWear);
+                    });
+                });
+            }  
+
+            string musicLog = musicKitId.HasValue ? musicKitId.Value.ToString() : "disabled";
+            string gloveLog = glove.HasValue ? $"{glove.Value.Name}, seed={gloveSeed}, wear={gloveWear:0.0000}" : "disabled";
+
+            Logger.LogInformation($"[BotInventory] Bot extras: slot={slot}, music={musicLog}, glove={gloveLog}");
         });
 
         return HookResult.Continue;
@@ -391,10 +312,12 @@ public partial class InventorySimulator
 
     private bool IsBotInventoryTarget(CCSPlayerController? player)
     {
-        if (player == null || !player.IsValid || player.IsHLTV)
-            return false;
+         if (player == null || !player.IsValid || player.IsHLTV)
+         return false;
 
+         if (player.IsBot)
+         return true;
 
-        return IsBotPlayer(player);
+         return Inventories.ShouldApplyToPlayers();
     }
 }

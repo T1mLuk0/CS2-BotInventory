@@ -12,7 +12,7 @@ public partial class InventorySimulator
     public HookResult OnPlayerConnect(EventPlayerConnect @event, GameEventInfo _)
     {
         var player = @event.Userid;
-        if (player != null && !player.IsBot)
+        if (player != null && !player.IsBot && Inventories.ShouldApplyToPlayers())
             player.HandleConnect();
         return HookResult.Continue;
     }
@@ -20,7 +20,7 @@ public partial class InventorySimulator
     public HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo _)
     {
         var player = @event.Userid;
-        if (player != null && !player.IsBot)
+        if (player != null && !player.IsBot && Inventories.ShouldApplyToPlayers())
             player.HandleConnect();
         return HookResult.Continue;
     }
