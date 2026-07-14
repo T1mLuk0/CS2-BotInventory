@@ -20,7 +20,6 @@ public partial class InventorySimulator
 
     private MemoryFunctionVoid<nint, string, float>? _setAttrByName;
     private ulong _nextBotExtraItemId = 0xF00DCAFE;
-    private bool _handlingBotExtraMvp = false;
 private void InitBotExtras()
     {
         try
@@ -56,6 +55,7 @@ private void InitBotExtras()
         RegisterEventHandler<EventPlayerTeam>(OnBotExtraPlayerTeam);
     }
 
+    // Apply persistent cosmetic extras when a target player spawns
     private HookResult OnBotExtraPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
         var player = @event.Userid;
@@ -152,10 +152,7 @@ private void InitBotExtras()
             }
 
             if (musicKitId.HasValue)
-            {
-                player.MusicKitID = musicKitId.Value;
-                Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitID");
-            }
+                ApplyBotExtraMusicKit(player, musicKitId.Value, 0);
 
             if (glove.HasValue)
             {
@@ -247,11 +244,9 @@ private void InitBotExtras()
         return HookResult.Continue;
     }
 
+    // Publish the assigned music kit through the original MVP event
     private HookResult OnBotExtraRoundMvp(EventRoundMvp @event, GameEventInfo info)
     {
-        if (_handlingBotExtraMvp)
-            return HookResult.Continue;
-
         var player = @event.Userid;
 
         if (!IsBotInventoryTarget(player))
@@ -260,54 +255,30 @@ private void InitBotExtras()
         if (!_botExtraKits.TryGetValue(player!.Slot, out int kitId))
             return HookResult.Continue;
 
-        info.DontBroadcast = true;
-        _handlingBotExtraMvp = true;
-
-        if (player.MusicKitID != kitId)
-        {
-            player.MusicKitID = kitId;
-            Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitID");
-        }
-
-        EventRoundMvp? newEvent = null;
-
-        try
-        {
-            newEvent = new EventRoundMvp(true)
-            {
-                Userid = player,
-                Musickitid = kitId,
-                Nomusic = 0,
-                Reason = @event.Reason,
-                Value = @event.Value,
-            };
-
-            foreach (var human in Utilities.GetPlayers()
-                         .Where(p => p.IsValid && !p.IsHLTV && !p.IsBot))
-            {
-                try
-                {
-                    newEvent.FireEventToClient(human);
-                }
-                catch
-                {
-                }
-            }
-        }
-        finally
-        {
-            try
-            {
-                newEvent?.Free();
-            }
-            catch
-            {
-            }
-
-            _handlingBotExtraMvp = false;
-        }
+        ApplyBotExtraMusicKit(player, kitId, 0);
+        @event.Musickitid = kitId;
+        @event.Musickitmvps = 0;
+        @event.Nomusic = 0;
 
         return HookResult.Continue;
+    }
+
+    // Synchronize every music-kit field used by the controller and MVP panel
+    private static void ApplyBotExtraMusicKit(CCSPlayerController player, int kitId, int musicKitMvps)
+    {
+        var inventory = player.InventoryServices;
+        if (inventory != null)
+        {
+            inventory.MusicID = checked((ushort)kitId);
+            Utilities.SetStateChanged(player, "CCSPlayerController", "m_pInventoryServices");
+        }
+
+        player.MusicKitID = kitId;
+        Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitID");
+        player.MusicKitMVPs = musicKitMvps;
+        Utilities.SetStateChanged(player, "CCSPlayerController", "m_iMusicKitMVPs");
+        player.MvpNoMusic = false;
+        Utilities.SetStateChanged(player, "CCSPlayerController", "m_bMvpNoMusic");
     }
 
     private bool IsBotInventoryTarget(CCSPlayerController? player)

@@ -62,6 +62,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         public AgentSkinConfig Agents { get; set; } = new();
         public StickerSkinConfig Stickers { get; set; } = new();
         public StatTrakSkinConfig StatTrak { get; set; } = new();
+        public SouvenirConfig Souvenir { get; set; } = new();
     }
 
     private sealed class WeaponSkinConfig
@@ -142,6 +143,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
 
     private sealed class StickerSkinConfig
     {
+        public bool Enabled { get; set; } = true;
         public int Kato14Min { get; set; } = 48;
         public int Kato14Max { get; set; } = 172;
         public double Kato14Rate { get; set; } = 0.6;
@@ -152,10 +154,16 @@ private static bool IsBotPlayer(CCSPlayerController? c)
     private sealed class StatTrakSkinConfig
     {
         public bool Enabled { get; set; } = true;
-        public double Chance { get; set; } = 0.8;
+        public double Chance { get; set; } = 0.6;
         public int CounterMin { get; set; } = 1;
         public int CounterMax { get; set; } = 10001;
         public Dictionary<string, int[]> WeaponPaints { get; set; } = new();
+    }
+
+    private sealed class SouvenirConfig
+    {
+        public bool Enabled { get; set; } = true;
+        public double Chance { get; set; } = 0.6;
     }
 
     private static BotInventoryConfig CreateDefaultBotInventoryConfig()
@@ -321,6 +329,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             },
             Stickers = new StickerSkinConfig
             {
+                Enabled = true,
                 Kato14Min = 48,
                 Kato14Max = 172,
                 Kato14Rate = 0.6,
@@ -330,7 +339,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             StatTrak = new StatTrakSkinConfig
             {
                 Enabled = true,
-                Chance = 0.8,
+                Chance = 0.6,
                 CounterMin = 1,
                 CounterMax = 10001,
                 WeaponPaints = new Dictionary<string, int[]>
@@ -370,6 +379,11 @@ private static bool IsBotPlayer(CCSPlayerController? c)
                     ["64"] = new[] { 12, 123, 522, 595, 683, 701, 721, 843, 892, 952, 1047, 1145, 1232 },
                     ["11"] = new[] { 195, 229, 382, 493, 511, 545, 606, 628, 677, 712, 806, 891, 980, 1095, 1129 },
                 }
+            },
+            Souvenir = new SouvenirConfig
+            {
+                Enabled = true,
+                Chance = 0.6,
             }            
         };
     }
@@ -635,8 +649,23 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         return _random.Next(min, max + 1);
     }
 
+    private static bool ShouldUseSouvenir()
+    {
+        var souvenir = _botInventoryConfig.Souvenir;
+
+        if (!souvenir.Enabled)
+            return false;
+
+        double chance = Math.Clamp(souvenir.Chance, 0.0, 1.0);
+
+        return _random.NextDouble() < chance;
+    }
+
     public static bool ShouldApplyToPlayers()
     {
+        // Disabled: inventories are applied to bots only.
+        //return false;
+
         EnsureBotInventoryConfigLoaded();
         return _botInventoryConfig.ApplyToPlayers;
     }
@@ -808,6 +837,10 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
     // posibilities
     private static List<StickerItem> GenerateFullStickers()
     {
+        if (!_botInventoryConfig.Stickers.Enabled)
+        {
+            return new List<StickerItem>();
+        }        
         var stickers = new List<StickerItem>();
         // slots
         uint tripleId = GetRandomStickerId();
@@ -866,7 +899,22 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                     if (paintIds.Length == 0)
                         continue;
                     int selectedPaint = paintIds[_random.Next(paintIds.Length)];
-                    int? statTrakValue = CreateStatTrakValue(defIndex, selectedPaint);
+                    bool isStatTrakPool = ContainsPaintKit(_botInventoryConfig.StatTrak.WeaponPaints,defIndex,selectedPaint);
+
+                    int? statTrakValue = null;
+                    bool souvenir = false;
+
+                    if (isStatTrakPool)
+                    {
+                        statTrakValue = CreateStatTrakValue(defIndex, selectedPaint);
+                    }
+
+                    // 只要没有生成ST，都继续参与Souvenir抽奖
+                    if (statTrakValue == null)
+                    {
+                        souvenir = ShouldUseSouvenir();
+                    }
+
                     var randomItem = new InventoryItem
                     {
                         Def = defIndex,
@@ -874,7 +922,8 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                         Wear = RandomWear(_botInventoryConfig.Weapons.MaxWear),
                         Seed = _random.Next(_botInventoryConfig.Weapons.MinSeed, _botInventoryConfig.Weapons.MaxSeed + 1),
                         Stickers = GenerateFullStickers(),
-                        Stattrak = statTrakValue
+                        Stattrak = statTrakValue,
+                        Souvenir = souvenir
                     };
                     data.CTWeapons[defIndex] = randomItem;
                     data.TWeapons[defIndex] = randomItem;

@@ -32,7 +32,7 @@ public static class CEconItemViewExtensions
         if (isMelee)
             self.EntityQuality = 3;
         else
-            self.EntityQuality = item.Stattrak >= 0 ? 9 : 4;
+            self.EntityQuality = item.Stattrak >= 0 ? 9 : (item.Souvenir ? 12 : 4);
         if (item.Nametag != null)
             self.CustomName = item.Nametag;
         var customAttrs = item.GetAttributes();
