@@ -17,6 +17,7 @@ public partial class InventorySimulator
     private readonly Dictionary<int, Inventories.BotGloveSkin> _botExtraGloves = new();
     private readonly Dictionary<int, int> _botExtraGloveSeeds = new();
     private readonly Dictionary<int, float> _botExtraGloveWears = new();
+    private readonly Dictionary<int, nint> _botExtraGlovePawnHandles = new();
 
     private MemoryFunctionVoid<nint, string, float>? _setAttrByName;
     private ulong _nextBotExtraItemId = 0xF00DCAFE;
@@ -42,20 +43,27 @@ private void InitBotExtras()
             _botExtraGloves.Clear();
             _botExtraGloveSeeds.Clear();
             _botExtraGloveWears.Clear();
+            _botExtraGlovePawnHandles.Clear();
 
             foreach (var model in Inventories.GetBotCtModels())
                 Server.PrecacheModel(model);
 
             foreach (var model in Inventories.GetBotTModels())
                 Server.PrecacheModel(model);
+
+            // Agent mode is applied directly from the catalog and must not rely on a BOT GC
+            // inventory object. Precache every official model used by the DefIndex pools.
+            foreach (var model in AgentCatalog.GetAllModels())
+                Server.PrecacheModel(model);
         });
 
-        RegisterEventHandler<EventPlayerSpawn>(OnBotExtraPlayerSpawn);
+        RegisterEventHandler<EventPlayerSpawn>(OnBotExtraPlayerSpawn, HookMode.Pre);
         RegisterEventHandler<EventRoundMvp>(OnBotExtraRoundMvp, HookMode.Pre);
         RegisterEventHandler<EventPlayerTeam>(OnBotExtraPlayerTeam);
     }
 
-    // Apply persistent cosmetic extras when a target player spawns
+    // Apply persistent cosmetic extras before the spawn event is broadcast to clients.
+    // This keeps the default glove model hidden while the final EconGloves item is prepared.
     private HookResult OnBotExtraPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
         var player = @event.Userid;
@@ -75,21 +83,41 @@ private void InitBotExtras()
 
         int slot = player.Slot;
 
-        if (!_botExtraModels.TryGetValue(slot, out string? model))
+        // Select an agent DefIndex from the generated inventory. BOTs use a synchronous temporary
+        // LOADOUT_SLOT_CLOTHING_CUSTOMPLAYER override so SetModelFromLoadout can initialize the
+        // agent response/radio identity even without a Steam/GC inventory or BotHider.
+        bool configuredAgentMode = Inventories.AreBotAgentsEnabled();
+        bool forcedMinimumModel = ConVars.MinModels.Value > 0;
+        ushort? assignedAgentDef = null;
+        var inventory = player.GetState().Inventory;
+        if (configuredAgentMode
+            && !forcedMinimumModel
+            && inventory?.Agents.TryGetValue(player.TeamNum, out var agentItem) == true)
         {
-            string[] modelPool = (CsTeam)player.TeamNum == CsTeam.CounterTerrorist
-                ? Inventories.GetBotCtModels()
-                : Inventories.GetBotTModels();
+            assignedAgentDef = agentItem.Def;
+        }
 
-            if (modelPool.Length > 0)
+        string model = string.Empty;
+        if (!configuredAgentMode && !forcedMinimumModel)
+        {
+            if (!_botExtraModels.TryGetValue(slot, out string? cachedModel))
             {
-                model = modelPool[_botExtraRng.Next(modelPool.Length)];
-                _botExtraModels[slot] = model;
+                string[] modelPool = (CsTeam)player.TeamNum == CsTeam.CounterTerrorist
+                    ? Inventories.GetBotCtModels()
+                    : Inventories.GetBotTModels();
+
+                if (modelPool.Length > 0)
+                {
+                    cachedModel = modelPool[_botExtraRng.Next(modelPool.Length)];
+                    _botExtraModels[slot] = cachedModel;
+                }
+                else
+                {
+                    cachedModel = string.Empty;
+                }
             }
-            else
-            {
-                model = string.Empty;
-            }
+
+            model = cachedModel ?? string.Empty;
         }
 
         if (!_botExtraKits.ContainsKey(slot)
@@ -99,9 +127,9 @@ private void InitBotExtras()
         }
 
         if (!_botExtraGloves.ContainsKey(slot)
-            && Inventories.TryGetRandomBotGlove(_botExtraRng, out var selectedGlove))
+            && Inventories.TryGetRandomBotGlove(_botExtraRng, out var generatedGlove))
         {
-            _botExtraGloves[slot] = selectedGlove;
+            _botExtraGloves[slot] = generatedGlove;
         }
 
         int slotSeed = 0;
@@ -120,6 +148,7 @@ private void InitBotExtras()
         }
 
         var pawn = player.PlayerPawn.Value;
+        var pawnHandle = pawn.Handle;
         var assignedModel = model ?? string.Empty;
 
         int? musicKitId = _botExtraKits.TryGetValue(slot, out int kitId)
@@ -130,25 +159,104 @@ private void InitBotExtras()
         if (_botExtraGloves.TryGetValue(slot, out var cachedGlove))
             glove = cachedGlove;
 
-        var gloveSeed = slotSeed;
-        var gloveWear = slotWear;
+        // Prepare the final glove item before the spawn event is broadcast.  Agent and music
+        // keep their proven dev1.4.1 NextFrame timing; only the glove visibility window changes.
+        if (glove.HasValue)
+        {
+            var selectedGlove = glove.Value;
+            pawn.AcceptInput("SetBodygroup", value: "first_or_third_person,0");
+            ApplyBotInventoryGloves(
+                player,
+                pawn,
+                selectedGlove.DefIndex,
+                selectedGlove.PaintKit,
+                slotSeed,
+                slotWear
+            );
+        }
 
         Server.NextFrame(() =>
         {
-            if (!IsBotInventoryTarget(player))
+            if (!IsBotInventoryTarget(player) || !player.IsValid)
                 return;
 
-            if (pawn == null || !pawn.IsValid)
+            var currentPawn = player.PlayerPawn.Value;
+            if (currentPawn == null
+                || !currentPawn.IsValid
+                || currentPawn.Handle != pawnHandle)
                 return;
 
-            if (!string.IsNullOrWhiteSpace(assignedModel))
+            if (configuredAgentMode && assignedAgentDef.HasValue)
             {
-                pawn.SetModel(assignedModel);
-                Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
+                if (player.IsBot)
+                {
+                    bool applied = AgentVoiceSync.ApplyModelAndVoice(
+                        player,
+                        currentPawn,
+                        assignedAgentDef.Value,
+                        "next-frame-bot-direct"
+                    );
 
-                var c = pawn.Render;
-                pawn.Render = Color.FromArgb(255, c.R, c.G, c.B);
-                Utilities.SetStateChanged(pawn, "CBaseModelEntity", "m_clrRender");
+                    if (applied)
+                    {
+                        var c = currentPawn.Render;
+                        currentPawn.Render = Color.FromArgb(255, c.R, c.G, c.B);
+                        Utilities.SetStateChanged(currentPawn, "CBaseModelEntity", "m_clrRender");
+                    }
+                    else
+                    {
+                        currentPawn.SetModelFromClass();
+                        Utilities.SetStateChanged(currentPawn, "CBaseEntity", "m_CBodyComponent");
+                    }
+
+                    // BOT spawn setup can still touch character fields after the direct model is
+                    // assigned. Reapply the identity block on the following world update.
+                    Server.NextWorldUpdate(() =>
+                    {
+                        if (!player.IsValid || !player.IsBot)
+                            return;
+
+                        var voicePawn = player.PlayerPawn.Value;
+                        if (voicePawn == null
+                            || !voicePawn.IsValid
+                            || voicePawn.Handle != pawnHandle)
+                            return;
+
+                        AgentVoiceSync.ApplyVoiceOnly(
+                            player,
+                            voicePawn,
+                            assignedAgentDef.Value,
+                            "next-world-update-bot-direct"
+                        );
+                    });
+                }
+                else
+                {
+                    // Custom paid agents are initialized by the loadout native only. A following
+                    // SetModelFromClass can overwrite the paid-agent response profile with the map
+                    // class. Humans must not be kept in the BOT reconciliation map.
+                    AgentVoiceSync.StopTrackingPawn(currentPawn);
+                    currentPawn.SetModelFromLoadout();
+                    Utilities.SetStateChanged(currentPawn, "CBaseEntity", "m_CBodyComponent");
+                }
+            }
+            else if (forcedMinimumModel)
+            {
+                currentPawn.SetModelFromLoadout();
+                currentPawn.SetModelFromClass();
+                Utilities.SetStateChanged(currentPawn, "CBaseEntity", "m_CBodyComponent");
+            }
+            else if (!configuredAgentMode
+                && !forcedMinimumModel
+                && !string.IsNullOrWhiteSpace(assignedModel))
+            {
+                // Legacy visual-only model pool. Kept only when Agents.Enabled is false.
+                currentPawn.SetModel(assignedModel);
+                Utilities.SetStateChanged(currentPawn, "CBaseEntity", "m_CBodyComponent");
+
+                var c = currentPawn.Render;
+                currentPawn.Render = Color.FromArgb(255, c.R, c.G, c.B);
+                Utilities.SetStateChanged(currentPawn, "CBaseModelEntity", "m_clrRender");
             }
 
             if (musicKitId.HasValue)
@@ -157,28 +265,67 @@ private void InitBotExtras()
             if (glove.HasValue)
             {
                 var selectedGlove = glove.Value;
-                Server.NextFrame(() =>
+                var currentGloves = currentPawn.EconGloves;
+                bool needsRewrite = !currentGloves.Initialized
+                    || currentGloves.ItemDefinitionIndex != selectedGlove.DefIndex;
+
+                ApplyBotInventoryGloves(
+                    player,
+                    currentPawn,
+                    selectedGlove.DefIndex,
+                    selectedGlove.PaintKit,
+                    slotSeed,
+                    slotWear,
+                    forceRewrite: needsRewrite
+                );
+
+                // The old implementation left bodygroup 0 active for 0.2 seconds.  One world
+                // update is sufficient for the engine to commit EconGloves and minimizes the
+                // default-glove/empty-hand window seen by observers.
+                Server.NextWorldUpdate(() =>
                 {
-                    if (!IsBotInventoryTarget(player) || !pawn.IsValid) return;
-                    ApplyBotInventoryGloves(player, pawn, selectedGlove.DefIndex, selectedGlove.PaintKit, gloveSeed, gloveWear);
-                    Server.NextFrame(() =>
+                    if (!IsBotInventoryTarget(player) || !player.IsValid)
+                        return;
+
+                    var finalPawn = player.PlayerPawn.Value;
+                    if (finalPawn == null
+                        || !finalPawn.IsValid
+                        || finalPawn.Handle != pawnHandle)
+                        return;
+
+                    var finalGloves = finalPawn.EconGloves;
+                    if (!finalGloves.Initialized
+                        || finalGloves.ItemDefinitionIndex != selectedGlove.DefIndex)
                     {
-                        if (IsBotInventoryTarget(player) && pawn.IsValid)
-                            ApplyBotInventoryGloves(player, pawn, selectedGlove.DefIndex, selectedGlove.PaintKit, gloveSeed, gloveWear);
-                    });
+                        ApplyBotInventoryGloves(
+                            player,
+                            finalPawn,
+                            selectedGlove.DefIndex,
+                            selectedGlove.PaintKit,
+                            slotSeed,
+                            slotWear,
+                            forceRewrite: true
+                        );
+                    }
+
+                    finalPawn.AcceptInput("SetBodygroup", value: "first_or_third_person,1");
                 });
-            }  
+            }
 
-            string musicLog = musicKitId.HasValue ? musicKitId.Value.ToString() : "disabled";
-            string gloveLog = glove.HasValue ? $"{glove.Value.Name}, seed={gloveSeed}, wear={gloveWear:0.0000}" : "disabled";
-
-            Logger.LogInformation($"[BotInventory] Bot extras: slot={slot}, music={musicLog}, glove={gloveLog}");
         });
 
         return HookResult.Continue;
     }
 
-    private void ApplyBotInventoryGloves(CCSPlayerController player, CCSPlayerPawn pawn, ushort defIndex, int paintKit, int seed, float wear)
+    private void ApplyBotInventoryGloves(
+        CCSPlayerController player,
+        CCSPlayerPawn pawn,
+        ushort defIndex,
+        int paintKit,
+        int seed,
+        float wear,
+        bool forceRewrite = false
+    )
     {
         if (_setAttrByName == null)
             return;
@@ -189,6 +336,14 @@ private void InitBotExtras()
                 return;
 
             var item = pawn.EconGloves;
+            bool samePawn = _botExtraGlovePawnHandles.TryGetValue(player.Slot, out nint appliedPawn)
+                && appliedPawn == pawn.Handle;
+            bool alreadyApplied = samePawn
+                && item.Initialized
+                && item.ItemDefinitionIndex == defIndex;
+
+            if (alreadyApplied && !forceRewrite)
+                return;
 
             item.NetworkedDynamicAttributes.Attributes.RemoveAll();
             item.AttributeList.Attributes.RemoveAll();
@@ -205,13 +360,7 @@ private void InitBotExtras()
             _setAttrByName.Invoke(item.AttributeList.Handle, "set item texture wear", wear);
 
             item.Initialized = true;
-
-            pawn.AcceptInput("SetBodygroup", value: "first_or_third_person,0");
-            AddTimer(0.2f, () =>
-            {
-                if (pawn.IsValid)
-                    pawn.AcceptInput("SetBodygroup", value: "first_or_third_person,1");
-            });
+            _botExtraGlovePawnHandles[player.Slot] = pawn.Handle;
         }
         catch (Exception ex)
         {
@@ -240,6 +389,7 @@ private void InitBotExtras()
         _botExtraGloves.Remove(slot);
         _botExtraGloveSeeds.Remove(slot);
         _botExtraGloveWears.Remove(slot);
+        _botExtraGlovePawnHandles.Remove(slot);
 
         return HookResult.Continue;
     }

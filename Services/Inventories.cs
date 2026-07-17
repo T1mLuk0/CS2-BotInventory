@@ -1,7 +1,5 @@
-using BotHiderApi;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Utils;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
@@ -12,9 +10,6 @@ namespace InventorySimulator;
 
 public static class Inventories
 {
-    private static readonly PluginCapability<IBotHiderApi> _botHiderCapability =
-        new("bothider:api");
-    private static IBotHiderApi? _botHiderApi;
     private static readonly Dictionary<ulong, PlayerInventory> _loadedInventories = [];
     private static readonly string _inventoryFileDir =
         "csgo/addons/counterstrikesharp/configs/plugins/InventorySimulator";
@@ -26,12 +21,22 @@ public static class Inventories
     private static readonly object _randomLock = new();
     private static ulong? _hostSteamId = null;
 
+    private sealed class AgentAssignment
+    {
+        public ushort CtDef { get; init; }
+        public ushort TDef { get; init; }
+    }
+
+    // One assignment per controller owner. Special agents are selected from the currently unused
+    // definitions, so two connected players do not receive the same agent for the same team.
+    private static readonly Dictionary<ulong, AgentAssignment> _agentAssignments = [];
+
 private static bool IsBotPlayer(CCSPlayerController? c)
 {
-    if (c == null)
+    if (c == null || !c.IsValid || c.IsHLTV)
         return false;
 
-    if (c.IsBot || (_botHiderApi?.IsManagedBot(c.Slot) ?? false))
+    if (c.IsBot)
         return true;
 
     return ShouldApplyToPlayers();
@@ -136,9 +141,25 @@ private static bool IsBotPlayer(CCSPlayerController? c)
     private sealed class AgentSkinConfig
     {
         public bool Enabled { get; set; } = true;
-        public double Chance { get; set; } = 0.9;
-        public int MinPaint { get; set; } = 1000;
-        public int MaxPaint { get; set; } = 1200;
+        public double Chance { get; set; } = 1.0;
+
+        // Agent cosmetics are item definitions, not paint kits. BotExtras resolves the model
+        // directly from this DefIndex and synchronizes the character/VO fields, so plain BOTs do
+        // not depend on CCSPlayerInventory, GC loadout state, or BotHider.
+        public int[] CtDefIndexes { get; set; } = new[]
+        {
+            4757, 4771, 5308, 4751, 5404, 4711, 4750, 4772, 4712, 5307,
+            5403, 4680, 4619, 4753, 4756, 4715, 4713, 4749, 5306, 5402,
+            5602, 5405, 5400, 4716, 4714, 5401, 5305, 5601, 4752
+        };
+
+        public int[] TDefIndexes { get; set; } = new[]
+        {
+            4726, 4736, 4735, 4777, 4734, 4733, 4780, 4774, 5504, 5108,
+            4732, 4613, 4773, 4727, 4775, 5503, 4718, 5502, 5107, 4730,
+            4728, 4776, 4781, 5207, 5501, 5500, 5106, 4778, 5109, 5208,
+            5505, 5105, 5206, 5205
+        };
     }
 
     private sealed class StickerSkinConfig
@@ -323,9 +344,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             Agents = new AgentSkinConfig
             {
                 Enabled = true,
-                Chance = 0.9,
-                MinPaint = 1000,
-                MaxPaint = 1200
+                Chance = 1.0
             },
             Stickers = new StickerSkinConfig
             {
@@ -609,6 +628,26 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         _botInventoryConfig.Models.CtModels ??= Array.Empty<string>();
         _botInventoryConfig.Models.TModels ??= Array.Empty<string>();
         _botInventoryConfig.Agents ??= new AgentSkinConfig();
+        _botInventoryConfig.Agents.CtDefIndexes ??= Array.Empty<int>();
+        _botInventoryConfig.Agents.TDefIndexes ??= Array.Empty<int>();
+
+        // dev1.4.4 test instructions temporarily used one fixed CT and one fixed T agent.
+        // Automatically restore the normal full random pools only for that exact known test pair,
+        // so users upgrading from the test build do not keep seeing every T as Number K.
+        bool isOldFixedVoiceTest = _botInventoryConfig.Agents.CtDefIndexes.SequenceEqual(new[] { 5308 })
+            && (_botInventoryConfig.Agents.TDefIndexes.SequenceEqual(new[] { 4726 })
+                || _botInventoryConfig.Agents.TDefIndexes.SequenceEqual(new[] { 4732 }));
+
+        if (isOldFixedVoiceTest)
+        {
+            var defaults = new AgentSkinConfig();
+            _botInventoryConfig.Agents.CtDefIndexes = defaults.CtDefIndexes;
+            _botInventoryConfig.Agents.TDefIndexes = defaults.TDefIndexes;
+            CSS.Plugin.Logger.LogInformation(
+                "BotInventory replaced the old fixed Ava/T-agent voice-test pools with the normal random pools."
+            );
+        }
+
         _botInventoryConfig.Stickers ??= new StickerSkinConfig();
         _botInventoryConfig.StatTrak ??= new StatTrakSkinConfig();
         _botInventoryConfig.StatTrak.WeaponPaints ??= new Dictionary<string, int[]>();
@@ -736,6 +775,24 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             .ToArray();
     }
 
+    public static bool AreBotAgentsEnabled()
+    {
+        EnsureBotInventoryConfigLoaded();
+        return _botInventoryConfig.Agents.Enabled;
+    }
+
+    public static void ReleaseAgentAssignment(ulong ownerKey)
+    {
+        lock (_randomLock)
+            _agentAssignments.Remove(ownerKey);
+    }
+
+    public static void ClearAgentAssignments()
+    {
+        lock (_randomLock)
+            _agentAssignments.Clear();
+    }
+
     // loadup
     public static bool Load(string filename)
     {
@@ -768,12 +825,6 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         }
     }
 
-    public static void ResolveBotHiderApi()
-    {
-        try { _botHiderApi = _botHiderCapability.Get(); }
-        catch { _botHiderApi = null; }
-    }
-
     // randomly hand out
     private static bool IsHost(ulong steamId)
     {
@@ -783,6 +834,19 @@ private static bool IsBotPlayer(CCSPlayerController? c)
     public static bool Has(ulong steamId)
     {
         return false;
+    }
+
+    private static ulong GetInventoryOwnerKey(ulong steamId, CCSPlayerController? player)
+    {
+        if (player == null || !player.IsValid)
+            return steamId;
+
+        if (player.IsBot)
+            return 0xB070000000000000UL | player.Index;
+
+        return steamId != 0
+            ? steamId
+            : 0xA110000000000000UL | player.Index;
     }
 
 public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInventory inventory, CCSPlayerController? player = null)
@@ -795,7 +859,8 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
 
     try
     {
-        inventory = GenerateHighTierRandomInventory(steamId);
+        ulong ownerKey = GetInventoryOwnerKey(steamId, player);
+        inventory = GenerateHighTierRandomInventory(steamId, ownerKey);
         return true;
     }
     catch (Exception ex)
@@ -809,7 +874,7 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
     {
         try
         {
-            return GenerateHighTierRandomInventory(steamId);
+            return GenerateHighTierRandomInventory(steamId, steamId);
         }
         catch (Exception ex)
         {
@@ -875,7 +940,48 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
         return stickers;
     }
 
-    private static PlayerInventory GenerateHighTierRandomInventory(ulong steamId)
+    private static AgentAssignment GetOrCreateAgentAssignment(
+        ulong ownerKey,
+        double agentChance,
+        int[] ctAgentDefs,
+        int[] tAgentDefs
+    )
+    {
+        if (_agentAssignments.TryGetValue(ownerKey, out var existing))
+            return existing;
+
+        bool useSpecialAgent = _random.NextDouble() < agentChance;
+        var assignment = new AgentAssignment
+        {
+            CtDef = useSpecialAgent
+                ? SelectUnusedAgentDef(ctAgentDefs, TEAM_CT, 5037)
+                : (ushort)5037,
+            TDef = useSpecialAgent
+                ? SelectUnusedAgentDef(tAgentDefs, TEAM_T, 5036)
+                : (ushort)5036
+        };
+
+        _agentAssignments[ownerKey] = assignment;
+        return assignment;
+    }
+
+    private static ushort SelectUnusedAgentDef(int[] pool, byte team, ushort fallback)
+    {
+        if (pool.Length == 0)
+            return fallback;
+
+        var used = new HashSet<ushort>();
+        foreach (var assignment in _agentAssignments.Values)
+            used.Add(team == TEAM_CT ? assignment.CtDef : assignment.TDef);
+
+        int[] available = pool
+            .Where(def => !used.Contains(checked((ushort)def)))
+            .ToArray();
+        int[] source = available.Length > 0 ? available : pool;
+        return checked((ushort)source[_random.Next(source.Length)]);
+    }
+
+    private static PlayerInventory GenerateHighTierRandomInventory(ulong steamId, ulong ownerKey)
     {
         lock (_randomLock)
         {
@@ -960,7 +1066,6 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
 
                     data.Knives[TEAM_CT] = ctKnifeItem;
                     data.Knives[TEAM_T] = tKnifeItem;
-                    CSS.Plugin.Logger.LogInformation($"生成 T 刀: {selectedKnifeT.Name}, Def={selectedKnifeT.Def}, Paint={knifePaintT}");
                 }
             }
             if (_botInventoryConfig.Gloves.Enabled)
@@ -989,17 +1094,28 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
             if (_botInventoryConfig.Agents.Enabled)
             {
                 double agentChance = Math.Clamp(_botInventoryConfig.Agents.Chance, 0.0, 1.0);
-                int minPaint = Math.Min(_botInventoryConfig.Agents.MinPaint, _botInventoryConfig.Agents.MaxPaint);
-                int maxPaint = Math.Max(_botInventoryConfig.Agents.MinPaint, _botInventoryConfig.Agents.MaxPaint);
-                if (_random.NextDouble() < agentChance)
-                {
-                    var agentItem = new InventoryItem
-                    {
-                        Paint = _random.Next(minPaint, maxPaint + 1),
-                    };
-                    data.Agents[TEAM_CT] = agentItem;
-                    data.Agents[TEAM_T] = agentItem;
-                }
+                int[] ctAgentDefs = _botInventoryConfig.Agents.CtDefIndexes
+                    .Where(def => def > 0
+                        && def <= ushort.MaxValue
+                        && AgentCatalog.IsValidForTeam((ushort)def, TEAM_CT))
+                    .Distinct()
+                    .ToArray();
+                int[] tAgentDefs = _botInventoryConfig.Agents.TDefIndexes
+                    .Where(def => def > 0
+                        && def <= ushort.MaxValue
+                        && AgentCatalog.IsValidForTeam((ushort)def, TEAM_T))
+                    .Distinct()
+                    .ToArray();
+
+                AgentAssignment assignment = GetOrCreateAgentAssignment(
+                    ownerKey,
+                    agentChance,
+                    ctAgentDefs,
+                    tAgentDefs
+                );
+
+                data.Agents[TEAM_CT] = new InventoryItem { Def = assignment.CtDef };
+                data.Agents[TEAM_T] = new InventoryItem { Def = assignment.TDef };
             }
             return new PlayerInventory(data);
         }

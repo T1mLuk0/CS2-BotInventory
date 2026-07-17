@@ -17,32 +17,81 @@ public static class CCSPlayerControllerExtensions
     > _controllerStateManager = [];
 
 public static CCSPlayerControllerState GetState(this CCSPlayerController self)
-{
-    return _controllerStateManager.GetOrAdd(self.Index, _ =>
     {
-        var state = new CCSPlayerControllerState(self.SteamID);
-
-        if (!self.IsBot && !Inventories.ShouldApplyToPlayers())
+        if (_controllerStateManager.TryGetValue(self.Index, out var existing))
         {
-            state.Inventory = null;
+            if (existing.ControllerHandle == self.Handle && existing.SteamID == self.SteamID)
+                return existing;
+
+            if (_controllerStateManager.TryRemove(self.Index, out var stale))
+            {
+                stale.DisposeUseCmdTimer();
+                stale.ClearEconItemView();
+                Inventories.ReleaseAgentAssignment(stale.OwnerKey);
+            }
         }
 
-        return state;
-    });
-}
+        return _controllerStateManager.GetOrAdd(self.Index, _ =>
+        {
+            PlayerInventory? inventory = null;
+            bool target = self.IsBot || Inventories.ShouldApplyToPlayers();
+            if (target && Inventories.TryGet(self.SteamID, out var generated, self))
+            {
+                generated.InitializeWearOverrides();
+                inventory = generated;
+            }
+
+            return new CCSPlayerControllerState(
+                self.SteamID,
+                BuildOwnerKey(self),
+                self.Handle,
+                inventory
+            );
+        });
+    }
+
+    private static ulong BuildOwnerKey(CCSPlayerController self)
+    {
+        // BOTs are always isolated by controller index, even when BotHider gives them a
+        // synthetic SteamID. Humans keep their real SteamID so upstream semantics remain intact.
+        if (self.IsBot)
+            return 0xB070000000000000UL | self.Index;
+
+        return self.SteamID != 0
+            ? self.SteamID
+            : 0xA110000000000000UL | self.Index;
+    }
 
     public static void Revalidate(this CCSPlayerController self)
     {
-        if (self.GetState().SteamID != self.SteamID)
-            self.RemoveState();
+        if (!_controllerStateManager.TryGetValue(self.Index, out var state))
+            return;
+
+        if (state.ControllerHandle != self.Handle || state.SteamID != self.SteamID)
+            RemoveState(self.Index);
     }
 
     public static void RemoveState(this CCSPlayerController self)
     {
-        var controllerState = self.GetState();
+        RemoveState(self.Index);
+    }
+
+    public static void RemoveState(uint controllerIndex)
+    {
+        if (!_controllerStateManager.TryRemove(controllerIndex, out var controllerState))
+            return;
+
         controllerState.DisposeUseCmdTimer();
         controllerState.ClearEconItemView();
-        _controllerStateManager.TryRemove(self.Index, out var _);
+        Inventories.ReleaseAgentAssignment(controllerState.OwnerKey);
+    }
+
+    public static void ClearAllStates()
+    {
+        foreach (var controllerIndex in _controllerStateManager.Keys)
+            RemoveState(controllerIndex);
+
+        CCSPlayerControllerState.ClearAllEconItemView();
     }
 
     public static void HandleConnect(this CCSPlayerController self)
@@ -179,8 +228,57 @@ public static CCSPlayerControllerState GetState(this CCSPlayerController self)
             oldInventory != null && oldInventory.Agents.TryGetValue(teamNum, out a) ? a : null;
         if (oldItem == item)
             return;
-        pawn.SetModelFromLoadout();
-        pawn.SetModelFromClass();
+
+        if (item?.Def is ushort agentDef)
+        {
+            if (self.IsBot)
+            {
+                // Stock BOTs may not have a usable GC loadout, so keep the proven direct model
+                // path and synchronize their radio identity explicitly.
+                if (!AgentVoiceSync.ApplyModelAndVoice(
+                        self,
+                        pawn,
+                        agentDef,
+                        "regive-agent-bot-direct"
+                    ))
+                    pawn.SetModelFromClass();
+
+                var pawnHandle = pawn.Handle;
+                Server.NextWorldUpdate(() =>
+                {
+                    if (!self.IsValid || !self.IsBot)
+                        return;
+
+                    var currentPawn = self.PlayerPawn.Value;
+                    if (currentPawn == null
+                        || !currentPawn.IsValid
+                        || currentPawn.Handle != pawnHandle)
+                        return;
+
+                    AgentVoiceSync.ApplyVoiceOnly(
+                        self,
+                        currentPawn,
+                        agentDef,
+                        "regive-agent-bot-world-update"
+                    );
+                });
+            }
+            else
+            {
+                // For a custom paid agent, keep the response identity produced by the loadout
+                // native. SetModelFromClass is reserved for the missing/default-agent fallback.
+                AgentVoiceSync.StopTrackingPawn(pawn);
+                pawn.SetModelFromLoadout();
+                Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
+            }
+        }
+        else
+        {
+            // Missing/invalid agent data: fall back to the map's normal class instead of
+            // leaving the pawn with a partially initialized model or voice identity.
+            pawn.SetModelFromClass();
+        }
+
         pawn.AcceptInput("SetBodygroup", value: "default_gloves,1");
     }
 
