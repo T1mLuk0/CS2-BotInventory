@@ -1,29 +1,27 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>BotInventory</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <BaseOutputPath>bin\</BaseOutputPath>
-    <OutputPath>$(BaseOutputPath)Release\plugins\Botinventory</OutputPath>
+    <BaseOutputPath>bin/</BaseOutputPath>
+    <OutputPath>$(BaseOutputPath)Release/plugins/Botinventory</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.367" />
-    <Reference Include="BotHiderApi">
-      <HintPath>libs\BotHiderApi.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <LangFiles Include="source\InventorySimulator\lang\**\*.*" />
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.371" />
+
+    <!-- The official InventorySimulator plugin owns the human-facing commands. -->
+    <Compile Remove="source/InventorySimulator.Commands.cs" />
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="Build">
-    <Copy SourceFiles="@(LangFiles)" DestinationFolder="$(OutputPath)\lang" />
+    <!-- BotInventory intentionally shares the upstream gamedata file and keys. -->
     <Copy
-      SourceFiles="gamedata\inventory-simulator.json"
-      DestinationFolder="$(OutputPath)\..\..\gamedata"
+      SourceFiles="gamedata/inventory-simulator.json"
+      DestinationFolder="$(OutputPath)/../../gamedata"
     />
   </Target>
 </Project>
