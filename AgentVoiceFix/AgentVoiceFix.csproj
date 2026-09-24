@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>AgentVoiceFix</AssemblyName>
+    <RootNamespace>AgentVoiceFix</RootNamespace>
+    <DebugType>portable</DebugType>
+    <BaseOutputPath>$(MSBuildProjectDirectory)/../bin/</BaseOutputPath>
+    <OutputPath>$(BaseOutputPath)$(Configuration)/plugins/AgentVoiceFix/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(CSS_API_PATH)' != ''">
+    <Reference Include="CounterStrikeSharp.API">
+      <HintPath>$(CSS_API_PATH)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CSS_API_PATH)' == ''">
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.371" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/agentvoicefix-current-catalog.json"
+                      LogicalName="AgentVoiceFix.Resources.agentvoicefix-current-catalog.json" />
+  </ItemGroup>
+
+  <Target Name="CopyAgentVoiceFixGamedata" AfterTargets="Build">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/gamedata/AgentVoiceFix.gamedata.json"
+          DestinationFolder="$(OutputPath)" />
+  </Target>
+</Project>

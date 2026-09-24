@@ -35,9 +35,7 @@ public class CCSPlayerControllerState(
         nint
     > _econItemViewManager = [];
 
-    // Agent loadout views deliberately use a separate cache.  They are constructed from zero and
-    // never copied from the BOT's original custom-player slot, so a male/default agent cannot leak
-    // cached static-definition state into a female or otherwise different paid agent.
+    // Agent views are fresh to prevent cached definition/model data leaking between agents.
     private static readonly ConcurrentDictionary<
         (ulong OwnerKey, int Team, ushort DefIndex),
         nint
@@ -82,9 +80,7 @@ public class CCSPlayerControllerState(
             return ptr;
         }
 
-        // GetItemInLoadout receives a complete game-owned item view. Clone it for
-        // loadout/MVP presentation so static prefab/model fields are preserved, while
-        // GiveNamedItem keeps its own view and cannot overwrite the showcase cache.
+        // Clone the complete game-owned view so loadout/MVP static fields stay intact.
         var itemView = SchemaHelper.CreateCEconItemView(copyFrom);
         itemView.ApplyAttributes(
             item,
@@ -96,7 +92,6 @@ public class CCSPlayerControllerState(
         return itemView.Handle;
     }
 
-
     public nint GetAgentEconItemView(int team, ushort defIndex, uint fallbackAccountId)
     {
         var key = (OwnerKey, team, defIndex);
@@ -107,8 +102,6 @@ public class CCSPlayerControllerState(
             return ptr;
         }
 
-        // Do not pass copyFrom here.  A copied CEconItemView may retain cached static item data for
-        // the previous custom-player item even when ItemDefinitionIndex is overwritten afterward.
         var itemView = SchemaHelper.CreateCEconItemView();
         itemView.ApplyAgentIdentity(defIndex, fallbackAccountId, assignNewItemId: true);
         _agentItemViewManager[key] = itemView.Handle;

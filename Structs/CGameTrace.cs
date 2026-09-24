@@ -1,4 +1,4 @@
-﻿/*---------------------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------------------------
  *  Copyright (c) Ian Lucas. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
@@ -8,7 +8,6 @@ using System.Runtime.InteropServices;
 
 namespace InventorySimulator;
 
-// This is a hack by Nuko.
 [StructLayout(LayoutKind.Explicit, Size = 0x44)]
 public struct TraceHitboxData
 {

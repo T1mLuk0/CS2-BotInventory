@@ -22,9 +22,7 @@ public static class CEconItemViewExtensions
     {
         var isMelee = slot == loadout_slot_t.LOADOUT_SLOT_MELEE;
 
-        // Set the definition before advertising the view as initialized.  Most views are copied
-        // from a game-owned item, but freshly constructed agent views start at DefIndex 0.  Keeping
-        // this order prevents any reader from observing an initialized view with stale static data.
+        // Set DefIndex before marking a fresh view initialized to avoid stale static data.
         if (item.Def != null)
             self.ItemDefinitionIndex = item.Def.Value;
 
@@ -47,11 +45,7 @@ public static class CEconItemViewExtensions
         self.Initialized = true;
     }
 
-    /// <summary>
-    /// Initializes a clean, non-cloned custom-player item view.  Agent character setup must not
-    /// inherit the original BOT loadout view because CEconItemView::operator= can carry cached
-    /// static-definition state from a different agent even after m_iItemDefinitionIndex is changed.
-    /// </summary>
+    // Agent views must be fresh; cloning can retain cached data from another agent definition.
     public static void ApplyAgentIdentity(
         this CEconItemView self,
         ushort defIndex,
@@ -70,9 +64,7 @@ public static class CEconItemViewExtensions
 
     private static void AssignStableItemId(CEconItemView self, bool assignNewItemId)
     {
-        // Keep a cached CEconItemView's identity stable.  The loadout/MVP code may query the same
-        // view many times per frame; changing ItemID on every query prevents material caches from
-        // settling even though the item definition still resolves.
+        // Keep cached view ItemID stable so material caches can settle across repeated queries.
         if (!assignNewItemId && self.ItemID >= MinimumCustomItemID)
             return;
 

@@ -7,7 +7,6 @@ using System.Runtime.InteropServices;
 
 namespace InventorySimulator;
 
-// Thanks to @samyycX.
 public struct CGCClientSharedObjectCache(nint handle)
 {
     public nint Handle { get; set; } = handle;

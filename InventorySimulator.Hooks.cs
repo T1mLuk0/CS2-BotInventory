@@ -66,38 +66,6 @@ public partial class InventorySimulator
             int slot = hook.GetParam<int>(2);
             nint originalReturn = hook.GetReturn<nint>();
 
-            // During BOT character initialization, resolve the exact temporary agent item
-            // without relying on SteamID, SOCache, or a discoverable inventory handle.
-            if (AgentLoadoutOverride.TryResolve(team, slot, out var agentScope))
-            {
-                var overridePlayer = agentScope.Player;
-                ushort overrideDefIndex = agentScope.DefIndex;
-                // Critical voice-coherence fix: construct the custom-player view from zero instead
-                // of cloning originalReturn.  The original BOT slot can contain a different diver,
-                // generic faction model, or stale item-definition cache.  Manually changing only
-                // ItemDefinitionIndex on that clone can make SetModelFromLoadout bind the old voice
-                // while a later SetModel call displays the requested model.
-                uint fallbackAccountId = overridePlayer.SteamID != 0
-                    ? new CSteamID(overridePlayer.SteamID).GetAccountID().m_AccountID
-                    : 0xB0700000u | (overridePlayer.Index & 0x0000FFFFu);
-                var overrideState = overridePlayer.GetState();
-                nint overrideItemViewPtr = overrideState.GetAgentEconItemView(
-                    team,
-                    overrideDefIndex,
-                    fallbackAccountId
-                );
-
-                var overrideItemView = new CEconItemView(overrideItemViewPtr);
-                ushort returnedDefIndex = overrideItemView.ItemDefinitionIndex;
-                agentScope.RecordConsumption(
-                    returnedDefIndex,
-                    usedFreshAgentView: true
-                );
-
-                hook.SetReturn(overrideItemViewPtr);
-                return HookResult.Changed;
-            }
-
             if (inventoryHandle == nint.Zero)
                 return HookResult.Continue;
 
@@ -105,27 +73,34 @@ public partial class InventorySimulator
             if (player == null || !IsBotPlayer(player))
                 return HookResult.Continue;
 
-            // Do not inject the configured BOT agent through the ordinary loadout hook.  The game
-            // must finish its normal map-class spawn first so Radio/DamageReact/Response services
-            // have a valid baseline.  Explicit vo_prefix agents are consumed later through the
-            // scoped AgentLoadoutOverride; inherited-voice agents are applied as visual-only models.
-            if (player.IsBot
-                && slot == (int)loadout_slot_t.LOADOUT_SLOT_CLOTHING_CUSTOMPLAYER
-                && Inventories.AreBotAgentsEnabled()
-                && ConVars.MinModels.Value <= 0)
-            {
-                return HookResult.Continue;
-            }
-
-            // A BOT without a GC/SOCache can legitimately have a null original loadout item.
-            // Melee/gloves/agents/music do not need a fallback defindex, so create their view
-            // directly from the generated inventory when possible.
+            // BOTs without GC/SOCache can have a null original loadout item.
             ushort fallbackDefIndex = 0;
             if (originalReturn != nint.Zero)
                 fallbackDefIndex = new CEconItemView(originalReturn).ItemDefinitionIndex;
 
             var controllerState = player.GetState();
             EnsureInventory(player, controllerState);
+
+            // Agent VO initialization requires a fresh item view to avoid stale definition data.
+            if (AgentLoadoutOverride.TryResolve(team, slot, out var agentOverride)
+                && agentOverride.Player.Handle == player.Handle)
+            {
+                uint accountId = originalReturn != nint.Zero
+                    ? new CEconItemView(originalReturn).AccountID
+                    : player.SteamID != 0
+                        ? new CSteamID(player.SteamID).GetAccountID().m_AccountID
+                        : 0;
+
+                nint agentView = controllerState.GetAgentEconItemView(
+                    team,
+                    agentOverride.DefIndex,
+                    accountId
+                );
+                ushort returnedDef = new CEconItemView(agentView).ItemDefinitionIndex;
+                agentOverride.RecordConsumption(returnedDef, usedFreshAgentView: true);
+                hook.SetReturn(agentView);
+                return HookResult.Changed;
+            }
 
             var item = controllerState.Inventory?.GetItemForSlot(
                 (byte)team,
@@ -182,8 +157,7 @@ public partial class InventorySimulator
             if (inventoryServices == null || inventoryServices.Handle == nint.Zero)
                 continue;
 
-            // CCSPlayerInventory is embedded in InventoryServices at the gamedata offset.
-            // The resulting address is the same `this` pointer received by GetItemInLoadout.
+            // InventoryServices embeds CCSPlayerInventory at the gamedata offset used here.
             if (inventoryServices.GetInventory().Handle == inventoryHandle)
                 return player;
         }

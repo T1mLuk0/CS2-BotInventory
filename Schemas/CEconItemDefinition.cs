@@ -8,7 +8,6 @@ using CounterStrikeSharp.API.Core;
 
 namespace InventorySimulator;
 
-// Thanks @Kxnrl.
 public class CEconItemDefinition(nint handle)
 {
     public nint Handle { get; set; } = handle;

@@ -61,11 +61,7 @@ public class PlayerInventory(EquippedV4Response data)
         return null;
     }
 
-    // It looks like CS2's client caches the weapon materials based on wear and seed. Until we figure out
-    // the proper way to force a material update, we need to ensure that every paint has a unique wear so
-    // that: 1) it gets regenerated, and 2) there are no rendering issues. As a drawback, every time
-    // players use !ws, their weapon's wear will decay, but I think it's a good trade-off since it also
-    // forces the sticker to regenerate. This approach is based on workarounds by @stefanx111 and @bklol.
+    // Unique wear values force CS2 to rebuild cached weapon materials/stickers and avoid rendering issues.
     private float GetWeaponWear(InventoryItem item)
     {
         if (item is not { Def: not null, Paint: not null, Wear: not null, Stickers: not null })

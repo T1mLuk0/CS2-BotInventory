@@ -1,25 +1,22 @@
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Utils;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Reflection;
 
 namespace InventorySimulator;
 
 public static class Inventories
 {
-    private static readonly Dictionary<ulong, PlayerInventory> _loadedInventories = [];
-    private static readonly string _inventoryFileDir =
-        "csgo/addons/counterstrikesharp/configs/plugins/InventorySimulator";
     private static readonly Random _rng = new Random();
-    
+
     private const byte TEAM_CT = 3;
     private const byte TEAM_T = 2;
     private static readonly Random _random = new();
     private static readonly object _randomLock = new();
-    private static ulong? _hostSteamId = null;
 
     private sealed class AgentAssignment
     {
@@ -27,25 +24,19 @@ public static class Inventories
         public ushort TDef { get; init; }
     }
 
-    // One assignment per controller owner. Special agents are selected from the currently unused
-    // definitions, so two connected players do not receive the same agent for the same team.
+    // Keep special-agent assignments unique per connected controller/team.
     private static readonly Dictionary<ulong, AgentAssignment> _agentAssignments = [];
 
-private static bool IsBotPlayer(CCSPlayerController? c)
-{
-    if (c == null || !c.IsValid || c.IsHLTV)
-        return false;
+    private static bool IsBotPlayer(CCSPlayerController? player)
+    {
+        if (player == null || !player.IsValid || player.IsHLTV)
+            return false;
 
-    if (c.IsBot)
-        return true;
+        return player.IsBot || ShouldApplyToPlayers();
+    }
 
-    return ShouldApplyToPlayers();
-}
-    // BotInventory JSON config
-    // address: addons/counterstrikesharp/configs/plugins/Botinventory/BotInventory.json
     private const string BOT_INVENTORY_CONFIG_FILE = "BotInventory.json";
-    private static BotInventoryConfig _botInventoryConfig = CreateDefaultBotInventoryConfig();
-    private static bool _botInventoryConfigLoaded = false;
+    private const int BOT_INVENTORY_CONFIG_VERSION = 3;
     private static readonly JsonSerializerOptions _botInventoryJsonOptions = new()
     {
         WriteIndented = true,
@@ -53,17 +44,17 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true
     };
+    private static BotInventoryConfig _botInventoryConfig = CreateDefaultBotInventoryConfig();
+    private static bool _botInventoryConfigLoaded = false;
 
     private sealed class BotInventoryConfig
     {
+        public int ConfigVersion { get; set; }
         public bool ApplyToPlayers { get; set; } = false;
         public WeaponSkinConfig Weapons { get; set; } = new();
         public KnifeSkinSection Knives { get; set; } = new();
-        // These sections are used by InventorySimulator.BotExtras.cs.
-        // They are kept in the same BotInventory.json so all BOT appearance data is in one place.
         public GloveSkinSection Gloves { get; set; } = new();
         public MusicKitConfig MusicKits { get; set; } = new();
-        public ModelConfig Models { get; set; } = new();
         public AgentSkinConfig Agents { get; set; } = new();
         public StickerSkinConfig Stickers { get; set; } = new();
         public StatTrakSkinConfig StatTrak { get; set; } = new();
@@ -91,6 +82,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         public int Def { get; set; }
         public string Name { get; set; } = string.Empty;
         public bool Enabled { get; set; } = true;
+        public int Weight { get; set; } = 1;
         public int[] PaintKits { get; set; } = Array.Empty<int>();
     }
 
@@ -106,9 +98,20 @@ private static bool IsBotPlayer(CCSPlayerController? c)
     private sealed class GloveSkinConfig
     {
         public int Def { get; set; }
-        public int Paint { get; set; }
         public string Name { get; set; } = string.Empty;
         public bool Enabled { get; set; } = true;
+        public int Weight { get; set; } = 1;
+        public int[] PaintKits { get; set; } = Array.Empty<int>();
+
+        // Legacy v1 field; migration groups it into PaintKits and then clears it.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? Paint { get; set; }
+    }
+
+    private sealed class BotCosmeticDefaultsDocument
+    {
+        public List<KnifeSkinConfig> Knives { get; set; } = new();
+        public List<GloveSkinConfig> Gloves { get; set; } = new();
     }
 
     private sealed class MusicKitConfig
@@ -117,24 +120,15 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         public int[] Ids { get; set; } = Array.Empty<int>();
     }
 
-    private sealed class ModelConfig
-    {
-        public bool Enabled { get; set; } = true;
-        public string[] CtModels { get; set; } = Array.Empty<string>();
-        public string[] TModels { get; set; } = Array.Empty<string>();
-    }
-
     public readonly struct BotGloveSkin
     {
         public ushort DefIndex { get; }
         public int PaintKit { get; }
-        public string Name { get; }
 
-        public BotGloveSkin(ushort defIndex, int paintKit, string name)
+        public BotGloveSkin(ushort defIndex, int paintKit)
         {
             DefIndex = defIndex;
             PaintKit = paintKit;
-            Name = name;
         }
     }
 
@@ -143,9 +137,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         public bool Enabled { get; set; } = true;
         public double Chance { get; set; } = 1.0;
 
-        // Agent cosmetics are item definitions, not paint kits. BotExtras resolves the model
-        // directly from this DefIndex and synchronizes the character/VO fields, so plain BOTs do
-        // not depend on CCSPlayerInventory, GC loadout state, or BotHider.
+        // Agent entries are item DefIndexes, not PaintKits.
         public int[] CtDefIndexes { get; set; } = new[]
         {
             4757, 4771, 5308, 4751, 5404, 4711, 4750, 4772, 4712, 5307,
@@ -162,14 +154,15 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         };
     }
 
+    private const int STICKER_KATO14_MIN = 48;
+    private const int STICKER_KATO14_MAX = 172;
+    private const int STICKER_NORMAL_MIN = 3000;
+    private const int STICKER_NORMAL_MAX = 5000;
+
     private sealed class StickerSkinConfig
     {
         public bool Enabled { get; set; } = true;
-        public int Kato14Min { get; set; } = 48;
-        public int Kato14Max { get; set; } = 172;
         public double Kato14Rate { get; set; } = 0.6;
-        public int NormalMin { get; set; } = 3000;
-        public int NormalMax { get; set; } = 5000;
     }
 
     private sealed class StatTrakSkinConfig
@@ -187,12 +180,30 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         public double Chance { get; set; } = 0.6;
     }
 
+    private static BotCosmeticDefaultsDocument LoadBotCosmeticDefaults()
+    {
+        const string resourceName = "InventorySimulator.Resources.bot_knife_glove_defaults.json";
+        using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
+            ?? throw new InvalidDataException($"Missing embedded BOT cosmetic defaults: {resourceName}");
+
+        var defaults = JsonSerializer.Deserialize<BotCosmeticDefaultsDocument>(
+            stream,
+            _botInventoryJsonOptions
+        ) ?? throw new InvalidDataException("BOT cosmetic defaults are empty.");
+
+        if (defaults.Knives.Count == 0 || defaults.Gloves.Count == 0)
+            throw new InvalidDataException("BOT cosmetic defaults are missing knives or gloves.");
+
+        return defaults;
+    }
+
     private static BotInventoryConfig CreateDefaultBotInventoryConfig()
     {
+        var cosmeticDefaults = LoadBotCosmeticDefaults();
         return new BotInventoryConfig
         {
+            ConfigVersion = BOT_INVENTORY_CONFIG_VERSION,
             ApplyToPlayers = false,
-            
             Weapons = new WeaponSkinConfig
             {
                 Enabled = true,
@@ -239,16 +250,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             {
                 Enabled = true,
                 MaxWear = 0.09f,
-                Items = new List<KnifeSkinConfig>
-                {
-                    new KnifeSkinConfig { Def = 500, Name = @"Bayonet", Enabled = false, PaintKits = new[] { 413, 420, 38, 417, 568 } },
-                    new KnifeSkinConfig { Def = 507, Name = @"Karambit", Enabled = true, PaintKits = new[] { 415, 572, 44, 42, 568, 12, 59, 38, 617, 413 } },
-                    new KnifeSkinConfig { Def = 508, Name = @"M9 Bayonet", Enabled = true, PaintKits = new[] { 417, 413, 418, 568, 12, 59, 38, 415, 617 } },
-                    new KnifeSkinConfig { Def = 515, Name = @"Butterfly", Enabled = true, PaintKits = new[] { 619, 44, 572, 413, 415, 12, 59, 38, 617 } },
-                    new KnifeSkinConfig { Def = 522, Name = @"Stiletto", Enabled = false, PaintKits = new[] { 417, 420, 0, 418, 419 } },
-                    new KnifeSkinConfig { Def = 523, Name = @"Talon", Enabled = true, PaintKits = new[] { 855, 38, 854, 853, 12, 59, 415, 617 } },
-                    new KnifeSkinConfig { Def = 525, Name = @"Skeleton", Enabled = false, PaintKits = new[] { 0, 413, 44, 415, 416 } },
-                }
+                Items = cosmeticDefaults.Knives
             },
             Gloves = new GloveSkinSection
             {
@@ -256,90 +258,12 @@ private static bool IsBotPlayer(CCSPlayerController? c)
                 MaxWear = 0.06f,
                 MinSeed = 1,
                 MaxSeed = 10000,
-                Items = new List<GloveSkinConfig>
-                {
-                    new GloveSkinConfig { Def = 5030, Paint = 10048, Name = @"Sport Gloves | Vice", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1407, Name = @"Sport Gloves | Big Game", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1406, Name = @"Sport Gloves | Nocts", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10038, Name = @"Sport Gloves | Hedge Maze", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1405, Name = @"Sport Gloves | Scarlet Shamagh", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1417, Name = @"Sport Gloves | Bronze Morph", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10045, Name = @"Sport Gloves | Amphibious", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10037, Name = @"Sport Gloves | Pandora's Box", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1410, Name = @"Sport Gloves | Omega", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10073, Name = @"Sport Gloves | Slingshot", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10018, Name = @"Sport Gloves | Superconductor", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10076, Name = @"Sport Gloves | Nocts", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10047, Name = @"Sport Gloves | Omega", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10075, Name = @"Sport Gloves | Scarlet Shamagh", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10074, Name = @"Sport Gloves | Big Game", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10046, Name = @"Sport Gloves | Bronze Morph", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1408, Name = @"Sport Gloves | Creme Pinstripe", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 1409, Name = @"Sport Gloves | Red Racer", Enabled = true },
-                    new GloveSkinConfig { Def = 5030, Paint = 10019, Name = @"Sport Gloves | Arid", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10026, Name = @"Moto Gloves | Spearmint", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10078, Name = @"Moto Gloves | Smoke Out", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10052, Name = @"Moto Gloves | Polygon", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10079, Name = @"Moto Gloves | Blood Pressure", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10049, Name = @"Moto Gloves | POW!", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10051, Name = @"Moto Gloves | Transport", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10050, Name = @"Moto Gloves | Turtle", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10077, Name = @"Moto Gloves | Finish Line", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10080, Name = @"Moto Gloves | 3rd Commando Company", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10028, Name = @"Moto Gloves | Cool Mint", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10024, Name = @"Moto Gloves | Eclipse", Enabled = true },
-                    new GloveSkinConfig { Def = 5033, Paint = 10027, Name = @"Moto Gloves | Boom!", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10033, Name = @"Specialist Gloves | Crimson Kimono", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10034, Name = @"Specialist Gloves | Emerald Web", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1413, Name = @"Specialist Gloves | Marble Fade", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1438, Name = @"Specialist Gloves | Pillow Punchers", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1416, Name = @"Specialist Gloves | Tiger Strike", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10061, Name = @"Specialist Gloves | Crimson Web", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1440, Name = @"Specialist Gloves | Cloud Chaser", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1437, Name = @"Specialist Gloves | Big Swell", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10063, Name = @"Specialist Gloves | Fade", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1414, Name = @"Specialist Gloves | Blackbook", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10065, Name = @"Specialist Gloves | Marble Fade", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10064, Name = @"Specialist Gloves | Mogul", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10068, Name = @"Specialist Gloves | Field Agent", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 1415, Name = @"Specialist Gloves | Chocolate Chesterfield", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10067, Name = @"Specialist Gloves | Tiger Strike", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10066, Name = @"Specialist Gloves | Lt. Commander", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10062, Name = @"Specialist Gloves | Buckshot", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10030, Name = @"Specialist Gloves | Forest DDPAT", Enabled = true },
-                    new GloveSkinConfig { Def = 5034, Paint = 10035, Name = @"Specialist Gloves | Foundation", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1399, Name = @"Driver Gloves | Rezan the Red", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10016, Name = @"Driver Gloves | Crimson Weave", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1401, Name = @"Driver Gloves | Imperial Plaid", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10041, Name = @"Driver Gloves | King Snake", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1398, Name = @"Driver Gloves | Wave Chaser", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10070, Name = @"Driver Gloves | Snow Leopard", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10042, Name = @"Driver Gloves | Imperial Plaid", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10072, Name = @"Driver Gloves | Black Tie", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1400, Name = @"Driver Gloves | Brocade Flowers", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1404, Name = @"Driver Gloves | Seigaiha", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1402, Name = @"Driver Gloves | Garden", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1439, Name = @"Driver Gloves | Hand Sweaters", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10071, Name = @"Driver Gloves | Queen Jaguar", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 1412, Name = @"Driver Gloves | Plum Quill", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10069, Name = @"Driver Gloves | Rezan the Red", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10043, Name = @"Driver Gloves | Overtake", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10044, Name = @"Driver Gloves | Racing Green", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10013, Name = @"Driver Gloves | Lunar Weave", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10015, Name = @"Driver Gloves | Convoy", Enabled = true },
-                    new GloveSkinConfig { Def = 5031, Paint = 10040, Name = @"Driver Gloves | Diamondback", Enabled = true }
-                }
+                Items = cosmeticDefaults.Gloves
             },
             MusicKits = new MusicKitConfig
             {
                 Enabled = true,
                 Ids = new[] { 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45 }
-            },
-            Models = new ModelConfig
-            {
-                Enabled = true,
-                CtModels = new[] { @"agents\\models\\ctm_sas\\ctm_sas_variantf.vmdl", @"agents\\models\\ctm_sas\\ctm_sas_variantg.vmdl", @"agents\\models\\ctm_st6\\ctm_st6_variantg.vmdl", @"agents\\models\\ctm_st6\\ctm_st6_varianti.vmdl", @"agents\\models\\ctm_st6\\ctm_st6_variantj.vmdl", @"agents\\models\\ctm_st6\\ctm_st6_variantk.vmdl", @"agents\\models\\ctm_fbi\\ctm_fbi_variantf.vmdl", @"agents\\models\\ctm_fbi\\ctm_fbi_variantg.vmdl", @"agents\\models\\ctm_swat\\ctm_swat_variantj.vmdl", @"agents\\models\\ctm_gendarmerie\\ctm_gendarmerie_variante.vmdl" },
-                TModels = new[] { @"agents\\models\\tm_professional\\tm_professional_varf.vmdl", @"agents\\models\\tm_professional\\tm_professional_varf1.vmdl", @"agents\\models\\tm_professional\\tm_professional_varf2.vmdl", @"agents\\models\\tm_professional\\tm_professional_varf3.vmdl", @"agents\\models\\tm_professional\\tm_professional_varf4.vmdl", @"agents\\models\\tm_professional\\tm_professional_varf5.vmdl", @"agents\\models\\tm_professional\\tm_professional_varg.vmdl", @"agents\\models\\tm_professional\\tm_professional_varh.vmdl", @"agents\\models\\tm_jungle_raider\\tm_jungle_raider_variantf.vmdl", @"agents\\models\\tm_leet\\tm_leet_varianti.vmdl" }
             },
             Agents = new AgentSkinConfig
             {
@@ -349,11 +273,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             Stickers = new StickerSkinConfig
             {
                 Enabled = true,
-                Kato14Min = 48,
-                Kato14Max = 172,
-                Kato14Rate = 0.6,
-                NormalMin = 3000,
-                NormalMax = 5000
+                Kato14Rate = 0.6
             },
             StatTrak = new StatTrakSkinConfig
             {
@@ -403,7 +323,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             {
                 Enabled = true,
                 Chance = 0.6,
-            }            
+            }
         };
     }
 
@@ -415,12 +335,9 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         {
             return gameDir;
         }
+
         string csgoDir = Path.Combine(gameDir, "csgo");
-        if (Directory.Exists(csgoDir))
-        {
-            return csgoDir;
-        }
-        return gameDir;
+        return Directory.Exists(csgoDir) ? csgoDir : gameDir;
     }
 
     private static string GetBotInventoryConfigDirectory()
@@ -465,6 +382,7 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         {
             string dir = GetBotInventoryConfigDirectory();
             Directory.CreateDirectory(dir);
+
             string path = GetBotInventoryConfigPath();
             if (!File.Exists(path))
             {
@@ -473,20 +391,26 @@ private static bool IsBotPlayer(CCSPlayerController? c)
                     path,
                     SerializeBotInventoryConfigForFile(_botInventoryConfig)
                 );
-                CSS.Plugin.Logger.LogInformation($"BotInventory config created: {path}");
             }
             else
             {
                 string json = File.ReadAllText(path);
-                _botInventoryConfig =
-                    JsonSerializer.Deserialize<BotInventoryConfig>(json, _botInventoryJsonOptions)
-                    ?? CreateDefaultBotInventoryConfig();
+                using var existingDocument = JsonDocument.Parse(json);
+
+                if (existingDocument.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    _botInventoryConfig = CreateDefaultBotInventoryConfig();
+                    File.WriteAllText(path, SerializeBotInventoryConfigForFile(_botInventoryConfig));
+                }
+                else
+                {
+                    _botInventoryConfig =
+                        JsonSerializer.Deserialize<BotInventoryConfig>(json, _botInventoryJsonOptions)
+                        ?? CreateDefaultBotInventoryConfig();
+                }
             }
             NormalizeBotInventoryConfig();
             File.WriteAllText(path, SerializeBotInventoryConfigForFile(_botInventoryConfig));
-            CSS.Plugin.Logger.LogInformation(
-                $"BotInventory config loaded. Weapons={_botInventoryConfig.Weapons.PaintKits.Count}, Knives={_botInventoryConfig.Knives.Items.Count}, Gloves={_botInventoryConfig.Gloves.Items.Count}, MusicKits={_botInventoryConfig.MusicKits.Ids.Length}, StatTrakChance={_botInventoryConfig.StatTrak.Chance}"
-            );
         }
         catch (Exception ex)
         {
@@ -622,18 +546,31 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         _botInventoryConfig.Knives.Items ??= new List<KnifeSkinConfig>();
         _botInventoryConfig.Gloves ??= new GloveSkinSection();
         _botInventoryConfig.Gloves.Items ??= new List<GloveSkinConfig>();
+
+        bool needsCosmeticV3Migration = _botInventoryConfig.ConfigVersion < BOT_INVENTORY_CONFIG_VERSION
+            || _botInventoryConfig.Gloves.Items.Any(item => item.Paint.HasValue);
+        if (needsCosmeticV3Migration)
+            UpgradeBotCosmeticsToV3();
+
+        foreach (var knife in _botInventoryConfig.Knives.Items)
+        {
+            knife.Name ??= string.Empty;
+            knife.PaintKits ??= Array.Empty<int>();
+        }
+        foreach (var glove in _botInventoryConfig.Gloves.Items)
+        {
+            glove.Name ??= string.Empty;
+            glove.PaintKits ??= Array.Empty<int>();
+            glove.Paint = null;
+        }
+
         _botInventoryConfig.MusicKits ??= new MusicKitConfig();
         _botInventoryConfig.MusicKits.Ids ??= Array.Empty<int>();
-        _botInventoryConfig.Models ??= new ModelConfig();
-        _botInventoryConfig.Models.CtModels ??= Array.Empty<string>();
-        _botInventoryConfig.Models.TModels ??= Array.Empty<string>();
         _botInventoryConfig.Agents ??= new AgentSkinConfig();
         _botInventoryConfig.Agents.CtDefIndexes ??= Array.Empty<int>();
         _botInventoryConfig.Agents.TDefIndexes ??= Array.Empty<int>();
 
-        // dev1.4.4 test instructions temporarily used one fixed CT and one fixed T agent.
-        // Automatically restore the normal full random pools only for that exact known test pair,
-        // so users upgrading from the test build do not keep seeing every T as Number K.
+        // One-time migration from the old fixed agent voice-test pools.
         bool isOldFixedVoiceTest = _botInventoryConfig.Agents.CtDefIndexes.SequenceEqual(new[] { 5308 })
             && (_botInventoryConfig.Agents.TDefIndexes.SequenceEqual(new[] { 4726 })
                 || _botInventoryConfig.Agents.TDefIndexes.SequenceEqual(new[] { 4732 }));
@@ -643,14 +580,159 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             var defaults = new AgentSkinConfig();
             _botInventoryConfig.Agents.CtDefIndexes = defaults.CtDefIndexes;
             _botInventoryConfig.Agents.TDefIndexes = defaults.TDefIndexes;
-            CSS.Plugin.Logger.LogInformation(
-                "BotInventory replaced the old fixed Ava/T-agent voice-test pools with the normal random pools."
-            );
         }
 
         _botInventoryConfig.Stickers ??= new StickerSkinConfig();
         _botInventoryConfig.StatTrak ??= new StatTrakSkinConfig();
         _botInventoryConfig.StatTrak.WeaponPaints ??= new Dictionary<string, int[]>();
+        _botInventoryConfig.Souvenir ??= new SouvenirConfig();
+    }
+
+    private static void UpgradeBotCosmeticsToV3()
+    {
+        var defaults = LoadBotCosmeticDefaults();
+        var existingKnives = _botInventoryConfig.Knives.Items
+            .GroupBy(item => item.Def)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        // Expand old knife/glove configs once; later user removals remain untouched.
+        var upgradedKnives = new List<KnifeSkinConfig>(defaults.Knives.Count);
+        foreach (var fallback in defaults.Knives)
+        {
+            existingKnives.TryGetValue(fallback.Def, out var current);
+            var paints = new HashSet<int>(fallback.PaintKits ?? Array.Empty<int>());
+            if (current?.PaintKits != null)
+                paints.UnionWith(current.PaintKits);
+
+            upgradedKnives.Add(new KnifeSkinConfig
+            {
+                Def = fallback.Def,
+                Name = !string.IsNullOrWhiteSpace(current?.Name) ? current!.Name : fallback.Name,
+                Enabled = current?.Enabled ?? fallback.Enabled,
+                Weight = fallback.Weight,
+                PaintKits = paints.ToArray()
+            });
+        }
+
+        foreach (var custom in _botInventoryConfig.Knives.Items.Where(item => !defaults.Knives.Any(d => d.Def == item.Def)))
+        {
+            custom.Name ??= string.Empty;
+            custom.PaintKits ??= Array.Empty<int>();
+            if (custom.Weight <= 0)
+                custom.Weight = 1;
+            upgradedKnives.Add(custom);
+        }
+        _botInventoryConfig.Knives.Items = upgradedKnives;
+
+        // Merge legacy per-skin glove rows into family PaintKits during migration.
+        var legacyGloves = _botInventoryConfig.Gloves.Items
+            .GroupBy(item => item.Def)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var upgradedGloves = new List<GloveSkinConfig>(defaults.Gloves.Count);
+
+        foreach (var fallback in defaults.Gloves)
+        {
+            legacyGloves.TryGetValue(fallback.Def, out var rows);
+            var paints = new HashSet<int>(fallback.PaintKits ?? Array.Empty<int>());
+
+            if (rows != null)
+            {
+                foreach (var row in rows)
+                {
+                    if (row.PaintKits != null)
+                        paints.UnionWith(row.PaintKits);
+                    if (row.Paint.HasValue)
+                        paints.Add(row.Paint.Value);
+                }
+            }
+
+            var namedRow = rows?.FirstOrDefault(row => !string.IsNullOrWhiteSpace(row.Name));
+            upgradedGloves.Add(new GloveSkinConfig
+            {
+                Def = fallback.Def,
+                Name = namedRow?.Name ?? fallback.Name,
+                Enabled = rows == null ? fallback.Enabled : rows.Any(row => row.Enabled),
+                Weight = fallback.Weight,
+                PaintKits = paints.ToArray(),
+                Paint = null
+            });
+        }
+
+        foreach (var group in legacyGloves.Where(pair => !defaults.Gloves.Any(d => d.Def == pair.Key)))
+        {
+            var rows = group.Value;
+            var paints = new HashSet<int>();
+            foreach (var row in rows)
+            {
+                if (row.PaintKits != null)
+                    paints.UnionWith(row.PaintKits);
+                if (row.Paint.HasValue)
+                    paints.Add(row.Paint.Value);
+            }
+
+            var first = rows[0];
+            upgradedGloves.Add(new GloveSkinConfig
+            {
+                Def = group.Key,
+                Name = rows.Select(row => row.Name).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? string.Empty,
+                Enabled = rows.Any(row => row.Enabled),
+                Weight = first.Weight > 0 ? first.Weight : 1,
+                PaintKits = paints.ToArray(),
+                Paint = null
+            });
+        }
+
+        _botInventoryConfig.Gloves.Items = upgradedGloves;
+        _botInventoryConfig.ConfigVersion = BOT_INVENTORY_CONFIG_VERSION;
+    }
+
+    private static T PickWeighted<T>(IReadOnlyList<T> values, Func<T, int> getWeight, Random rng)
+    {
+        if (values.Count == 0)
+            throw new InvalidOperationException("Cannot select from an empty weighted pool.");
+
+        long totalWeight = 0;
+        foreach (var value in values)
+        {
+            int weight = getWeight(value);
+            if (weight <= 0)
+                throw new InvalidOperationException("BOT cosmetic weights must be positive.");
+            totalWeight = checked(totalWeight + weight);
+        }
+
+        long roll = rng.NextInt64(totalWeight);
+        foreach (var value in values)
+        {
+            int weight = getWeight(value);
+            if (roll < weight)
+                return value;
+            roll -= weight;
+        }
+
+        throw new InvalidOperationException("Weighted BOT cosmetic selection did not resolve.");
+    }
+
+    private static bool TrySelectRandomBotKnife(
+        Random rng,
+        out KnifeSkinConfig selectedKnife,
+        out int paintKit)
+    {
+        selectedKnife = null!;
+        paintKit = 0;
+
+        var enabledKnives = _botInventoryConfig.Knives.Items
+            .Where(item => item.Enabled
+                && item.Def > 0
+                && item.Weight > 0
+                && item.PaintKits != null
+                && item.PaintKits.Length > 0)
+            .ToArray();
+        if (enabledKnives.Length == 0)
+            return false;
+
+        selectedKnife = PickWeighted(enabledKnives, item => item.Weight, rng);
+        paintKit = selectedKnife.PaintKits[rng.Next(selectedKnife.PaintKits.Length)];
+        return true;
     }
 
     private static float RandomWear(float maxWear)
@@ -688,23 +770,8 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         return _random.Next(min, max + 1);
     }
 
-    private static bool ShouldUseSouvenir()
-    {
-        var souvenir = _botInventoryConfig.Souvenir;
-
-        if (!souvenir.Enabled)
-            return false;
-
-        double chance = Math.Clamp(souvenir.Chance, 0.0, 1.0);
-
-        return _random.NextDouble() < chance;
-    }
-
     public static bool ShouldApplyToPlayers()
     {
-        // Disabled: inventories are applied to bots only.
-        //return false;
-
         EnsureBotInventoryConfigLoaded();
         return _botInventoryConfig.ApplyToPlayers;
     }
@@ -716,16 +783,20 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         var gloves = _botInventoryConfig.Gloves;
         if (!gloves.Enabled)
             return false;
-        var enabledGloves = gloves.Items
-            .Where(g => g.Enabled && g.Def > 0 && g.Paint >= 0)
+
+        var enabledFamilies = gloves.Items
+            .Where(item => item.Enabled
+                && item.Def > 0
+                && item.Weight > 0
+                && item.PaintKits != null
+                && item.PaintKits.Length > 0)
             .ToArray();
-        if (enabledGloves.Length == 0)
+        if (enabledFamilies.Length == 0)
             return false;
-        var selected = enabledGloves[rng.Next(enabledGloves.Length)];
-        string name = string.IsNullOrWhiteSpace(selected.Name)
-            ? $"Glove {selected.Def} | {selected.Paint}"
-            : selected.Name;
-        glove = new BotGloveSkin((ushort)selected.Def, selected.Paint, name);
+
+        var selectedFamily = PickWeighted(enabledFamilies, item => item.Weight, rng);
+        int selectedPaint = selectedFamily.PaintKits[rng.Next(selectedFamily.PaintKits.Length)];
+        glove = new BotGloveSkin((ushort)selectedFamily.Def, selectedPaint);
         return true;
     }
 
@@ -755,26 +826,6 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         return true;
     }
 
-    public static string[] GetBotCtModels()
-    {
-        EnsureBotInventoryConfigLoaded();
-        if (!_botInventoryConfig.Models.Enabled)
-            return Array.Empty<string>();
-        return _botInventoryConfig.Models.CtModels
-            .Where(m => !string.IsNullOrWhiteSpace(m))
-            .ToArray();
-    }
-
-    public static string[] GetBotTModels()
-    {
-        EnsureBotInventoryConfigLoaded();
-        if (!_botInventoryConfig.Models.Enabled)
-            return Array.Empty<string>();
-        return _botInventoryConfig.Models.TModels
-            .Where(m => !string.IsNullOrWhiteSpace(m))
-            .ToArray();
-    }
-
     public static bool AreBotAgentsEnabled()
     {
         EnsureBotInventoryConfigLoaded();
@@ -793,42 +844,14 @@ private static bool IsBotPlayer(CCSPlayerController? c)
             _agentAssignments.Clear();
     }
 
-    // loadup
-    public static bool Load(string filename)
+    private static ulong GetInventoryOwnerKey(CCSPlayerController player)
     {
-        try
-        {
-            EnsureBotInventoryConfigLoaded();
-            var candidates = new[]
-            {
-                Path.Combine(Server.GameDirectory, _inventoryFileDir, filename),
-                Path.Combine(Server.GameDirectory, "csgo", filename),
-            };
-            var path = candidates.FirstOrDefault(File.Exists) ??
-                       (Path.IsPathRooted(filename) && File.Exists(filename) ? filename : null);
-            if (path == null)
-                return false;
-            string json = File.ReadAllText(path);
-            var inventories = JsonSerializer.Deserialize<Dictionary<ulong, PlayerInventory>>(json);
-            if (inventories != null)
-            {
-                _loadedInventories.Clear();
-                foreach (var pair in inventories)
-                    _loadedInventories.TryAdd(pair.Key, pair.Value);
-            }
-            return true;
-        }
-        catch (Exception ex)
-        {
-            CSS.Plugin.Logger.LogError($"Error loading inventory file \"{filename}\": {ex.Message}");
-            return false;
-        }
-    }
+        if (player.IsBot)
+            return 0xB070000000000000UL | player.Index;
 
-    // randomly hand out
-    private static bool IsHost(ulong steamId)
-    {
-        return _hostSteamId.HasValue && steamId == _hostSteamId.Value;
+        return player.SteamID != 0
+            ? player.SteamID
+            : 0xA110000000000000UL | player.Index;
     }
 
     public static bool Has(ulong steamId)
@@ -836,54 +859,31 @@ private static bool IsBotPlayer(CCSPlayerController? c)
         return false;
     }
 
-    private static ulong GetInventoryOwnerKey(ulong steamId, CCSPlayerController? player)
+    public static bool TryGet(
+    ulong steamId,
+    [MaybeNullWhen(false)] out PlayerInventory inventory,
+    CCSPlayerController? player = null
+    )
     {
-        if (player == null || !player.IsValid)
-            return steamId;
+        inventory = null;
+        if (!IsBotPlayer(player))
+            return false;
 
-        if (player.IsBot)
-            return 0xB070000000000000UL | player.Index;
-
-        return steamId != 0
-            ? steamId
-            : 0xA110000000000000UL | player.Index;
-    }
-
-public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInventory inventory, CCSPlayerController? player = null)
-{
-    inventory = null;
-    if (IsHost(steamId))
-        return false;
-    if (!IsBotPlayer(player))
-        return false;
-
-    try
-    {
-        ulong ownerKey = GetInventoryOwnerKey(steamId, player);
-        inventory = GenerateHighTierRandomInventory(steamId, ownerKey);
-        return true;
-    }
-    catch (Exception ex)
-    {
-        CSS.Plugin.Logger.LogError($"Failed to generate random inventory for {steamId}: {ex.Message}");
-        return false;
-    }
-}
-
-    public static PlayerInventory? Get(ulong steamId)
-    {
         try
         {
-            return GenerateHighTierRandomInventory(steamId, steamId);
+            ulong ownerKey = GetInventoryOwnerKey(player!);
+            inventory = GenerateHighTierRandomInventory(steamId, ownerKey);
+            return true;
         }
         catch (Exception ex)
         {
-            CSS.Plugin.Logger.LogError($"Failed to get random inventory for {steamId}: {ex.Message}");
-            return null;
+            CSS.Plugin.Logger.LogError(
+                $"Failed to generate random inventory for controller {player!.Index}: {ex.Message}"
+            );
+            return false;
         }
     }
 
-    // stickers hand out
     private static uint GetRandomStickerId()
     {
         EnsureBotInventoryConfigLoaded();
@@ -891,23 +891,21 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
         double roll = _rng.NextDouble();
         if (roll < stickerConfig.Kato14Rate)
         {
-            return (uint)_rng.Next(stickerConfig.Kato14Min, stickerConfig.Kato14Max + 1);
+            return (uint)_rng.Next(STICKER_KATO14_MIN, STICKER_KATO14_MAX + 1);
         }
         else
         {
-            return (uint)_rng.Next(stickerConfig.NormalMin, stickerConfig.NormalMax + 1);
+            return (uint)_rng.Next(STICKER_NORMAL_MIN, STICKER_NORMAL_MAX + 1);
         }
     }
 
-    // posibilities
     private static List<StickerItem> GenerateFullStickers()
     {
         if (!_botInventoryConfig.Stickers.Enabled)
         {
             return new List<StickerItem>();
-        }        
+        }
         var stickers = new List<StickerItem>();
-        // slots
         uint tripleId = GetRandomStickerId();
         for (int i = 0; i < 3; i++)
         {
@@ -921,7 +919,6 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                 Y = null
             });
         }
-        // random slots
         for (int i = 3; i < 5; i++)
         {
             if (_rng.NextDouble() < 0.5)
@@ -993,7 +990,7 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
             data.Agents = new Dictionary<byte, InventoryItem>();
             data.MusicKit = null;
             data.Graffiti = null;
-            
+
             EnsureBotInventoryConfigLoaded();
             if (_botInventoryConfig.Weapons.Enabled)
             {
@@ -1008,17 +1005,20 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                     bool isStatTrakPool = ContainsPaintKit(_botInventoryConfig.StatTrak.WeaponPaints,defIndex,selectedPaint);
 
                     int? statTrakValue = null;
-                    bool souvenir = false;
+                    SouvenirRoll? souvenir = null;
 
                     if (isStatTrakPool)
                     {
                         statTrakValue = CreateStatTrakValue(defIndex, selectedPaint);
                     }
 
-                    // 只要没有生成ST，都继续参与Souvenir抽奖
                     if (statTrakValue == null)
                     {
-                        souvenir = ShouldUseSouvenir();
+                        souvenir = SouvenirSystem.Roll(
+                            _random,
+                            _botInventoryConfig.Souvenir.Enabled,
+                            _botInventoryConfig.Souvenir.Chance
+                        );
                     }
 
                     var randomItem = new InventoryItem
@@ -1027,9 +1027,9 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                         Paint = selectedPaint,
                         Wear = RandomWear(_botInventoryConfig.Weapons.MaxWear),
                         Seed = _random.Next(_botInventoryConfig.Weapons.MinSeed, _botInventoryConfig.Weapons.MaxSeed + 1),
-                        Stickers = GenerateFullStickers(),
+                        Stickers = souvenir?.Stickers ?? GenerateFullStickers(),
                         Stattrak = statTrakValue,
-                        Souvenir = souvenir
+                        Souvenir = souvenir != null
                     };
                     data.CTWeapons[defIndex] = randomItem;
                     data.TWeapons[defIndex] = randomItem;
@@ -1037,14 +1037,8 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
             }
             if (_botInventoryConfig.Knives.Enabled)
             {
-                var enabledKnives = _botInventoryConfig.Knives.Items
-                    .Where(k => k.Enabled && k.PaintKits != null && k.PaintKits.Length > 0)
-                    .ToArray();
-                if (enabledKnives.Length > 0)
+                if (TrySelectRandomBotKnife(_random, out var selectedKnifeCT, out int knifePaintCT))
                 {
-                    var selectedKnifeCT = enabledKnives[_random.Next(enabledKnives.Length)];
-                    int knifePaintCT = selectedKnifeCT.PaintKits[_random.Next(selectedKnifeCT.PaintKits.Length)];
-
                     var ctKnifeItem = new InventoryItem
                     {
                         Def = (ushort)selectedKnifeCT.Def,
@@ -1052,10 +1046,11 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                         Wear = RandomWear(_botInventoryConfig.Knives.MaxWear),
                         Seed = _random.Next(1, 10000),
                     };
+                    data.Knives[TEAM_CT] = ctKnifeItem;
+                }
 
-                    var selectedKnifeT = enabledKnives[_random.Next(enabledKnives.Length)];
-                    int knifePaintT = selectedKnifeT.PaintKits[_random.Next(selectedKnifeT.PaintKits.Length)];
-
+                if (TrySelectRandomBotKnife(_random, out var selectedKnifeT, out int knifePaintT))
+                {
                     var tKnifeItem = new InventoryItem
                     {
                         Def = (ushort)selectedKnifeT.Def,
@@ -1063,34 +1058,25 @@ public static bool TryGet(ulong steamId, [MaybeNullWhen(false)] out PlayerInvent
                         Wear = RandomWear(_botInventoryConfig.Knives.MaxWear),
                         Seed = _random.Next(1, 10000),
                     };
-
-                    data.Knives[TEAM_CT] = ctKnifeItem;
                     data.Knives[TEAM_T] = tKnifeItem;
                 }
             }
-            if (_botInventoryConfig.Gloves.Enabled)
+            if (_botInventoryConfig.Gloves.Enabled
+                && TryGetRandomBotGlove(_random, out var selectedGlove))
             {
-                var enabledGloves = _botInventoryConfig.Gloves.Items
-                    .Where(g => g.Enabled && g.Def > 0 && g.Paint >= 0)
-                    .ToArray();
-
-                if (enabledGloves.Length > 0)
+                var gloveItem = new InventoryItem
                 {
-                    var selectedGlove = enabledGloves[_random.Next(enabledGloves.Length)];
-                    var gloveItem = new InventoryItem
-                    {
-                        Def = (ushort)selectedGlove.Def,
-                        Paint = selectedGlove.Paint,
-                        Wear = RandomWear(_botInventoryConfig.Gloves.MaxWear),
-                        Seed = _random.Next(
-                            _botInventoryConfig.Gloves.MinSeed,
-                            _botInventoryConfig.Gloves.MaxSeed + 1
-                        )
-                    };
-                    data.Gloves[TEAM_CT] = gloveItem;
-                    data.Gloves[TEAM_T] = gloveItem;
-                }
-            }                                  
+                    Def = selectedGlove.DefIndex,
+                    Paint = selectedGlove.PaintKit,
+                    Wear = RandomWear(_botInventoryConfig.Gloves.MaxWear),
+                    Seed = _random.Next(
+                        Math.Min(_botInventoryConfig.Gloves.MinSeed, _botInventoryConfig.Gloves.MaxSeed),
+                        Math.Max(_botInventoryConfig.Gloves.MinSeed, _botInventoryConfig.Gloves.MaxSeed) + 1
+                    )
+                };
+                data.Gloves[TEAM_CT] = gloveItem;
+                data.Gloves[TEAM_T] = gloveItem;
+            }
             if (_botInventoryConfig.Agents.Enabled)
             {
                 double agentChance = Math.Clamp(_botInventoryConfig.Agents.Chance, 0.0, 1.0);

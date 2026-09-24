@@ -6,22 +6,34 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <BaseOutputPath>bin/</BaseOutputPath>
-    <OutputPath>$(BaseOutputPath)Release/plugins/Botinventory</OutputPath>
+    <OutputPath>$(BaseOutputPath)$(Configuration)/plugins/Botinventory/</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="CounterStrikeSharp.API" Version="1.0.371" />
 
+    <!-- Build AgentVoiceFix together while keeping it as a separate plugin assembly. -->
+    <ProjectReference Include="AgentVoiceFix/AgentVoiceFix.csproj" ReferenceOutputAssembly="false" />
+    <Compile Remove="AgentVoiceFix/**/*.cs" />
+
     <!-- The official InventorySimulator plugin owns the human-facing commands. -->
-    <Compile Remove="source/InventorySimulator.Commands.cs" />
+    <Compile Remove="InventorySimulator.Commands.cs" />
+    <EmbeddedResource
+      Include="Resources/souvenir_gold_catalog.json"
+      LogicalName="InventorySimulator.Resources.souvenir_gold_catalog.json"
+    />
+    <EmbeddedResource
+      Include="Resources/bot_knife_glove_defaults.json"
+      LogicalName="InventorySimulator.Resources.bot_knife_glove_defaults.json"
+    />
   </ItemGroup>
 
-  <Target Name="PostBuild" AfterTargets="Build">
-    <!-- BotInventory intentionally shares the upstream gamedata file and keys. -->
+  <Target Name="CopyBotInventoryGamedata" AfterTargets="Build">
+    <MakeDir Directories="$(BaseOutputPath)$(Configuration)/gamedata/" />
     <Copy
-      SourceFiles="gamedata/inventory-simulator.json"
-      DestinationFolder="$(OutputPath)/../../gamedata"
+      SourceFiles="$(MSBuildProjectDirectory)/gamedata/inventory-simulator.json"
+      DestinationFolder="$(BaseOutputPath)$(Configuration)/gamedata/"
     />
   </Target>
 </Project>

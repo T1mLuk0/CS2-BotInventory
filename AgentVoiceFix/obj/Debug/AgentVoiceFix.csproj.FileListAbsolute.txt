@@ -1,0 +1,12 @@
+C:\Users\a7559\Desktop\release\test\bin\Debug\plugins\AgentVoiceFix\AgentVoiceFix.deps.json
+C:\Users\a7559\Desktop\release\test\bin\Debug\plugins\AgentVoiceFix\AgentVoiceFix.dll
+C:\Users\a7559\Desktop\release\test\bin\Debug\plugins\AgentVoiceFix\AgentVoiceFix.pdb
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.csproj.AssemblyReference.cache
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.AssemblyInfoInputs.cache
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.AssemblyInfo.cs
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.csproj.CoreCompileInputs.cache
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.dll
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\refint\AgentVoiceFix.dll
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\AgentVoiceFix.pdb
+C:\Users\a7559\Desktop\release\test\AgentVoiceFix\obj\Debug\ref\AgentVoiceFix.dll

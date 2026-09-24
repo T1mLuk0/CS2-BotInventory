@@ -4,10 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 using CounterStrikeSharp.API;
-using Microsoft.Extensions.Logging;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Memory;
-using CounterStrikeSharp.API.Modules.Timers;
 
 namespace InventorySimulator;
 
@@ -15,9 +13,9 @@ public partial class InventorySimulator : BasePlugin
 {
     public override string ModuleAuthor => "T1mLuk0 + Dilemma (based on ianlucas)";
     public override string ModuleDescription =>
-        "Stable BOT paid-agent model and voice initialization";
-    public override string ModuleName => "Bot-Inventory";
-    public override string ModuleVersion => "1.3.0-dev1.4.20-agentvoice-stable-clean";
+        "Advanced BOT cosmetic inventory with personalized agent models/voice and compact JSON config";
+    public override string ModuleName => "BotInventory";
+    public override string ModuleVersion => "1.3.0";
 
     private bool _inventoryHooksRegistered;
 
@@ -38,15 +36,7 @@ public partial class InventorySimulator : BasePlugin
         Inventories.InitBotInventoryConfig();
         InitBotExtras();
 
-        // Keep explicit paid-agent identity coherent while a BOT controls the pawn. Agents without
-        // vo_prefix are visual-only, and human takeover is intentionally left to the game.
-        AddTimer(
-            0.25f,
-            ReconcileAgentVoiceIdentities,
-            TimerFlags.REPEAT
-        );
-
-        // State is keyed by the controller entity and must not survive a map/controller lifetime.
+        // Controller state must not survive map/controller lifetimes.
         RegisterListener<Listeners.OnMapStart>(_ =>
         {
             CCSPlayerControllerExtensions.ClearAllStates();
@@ -56,21 +46,11 @@ public partial class InventorySimulator : BasePlugin
         RegisterListener<Listeners.OnEntityDeleted>(OnControllerEntityDeleted);
         RegisterEventHandler<EventPlayerDisconnect>(OnBotInventoryDisconnect, HookMode.Post);
 
-        // Keep the original InventorySimulator injection mechanism.  Only the owner lookup is
-        // changed: BOTs are resolved through their controller/inventory handle, not SteamID/SOCache.
+        // BOT ownership is resolved by controller/inventory handle, not SteamID/SOCache.
         VirtualFunctions.GiveNamedItemFunc.Hook(OnGiveNamedItemPre, HookMode.Pre);
         Natives.CCSPlayerInventory_GetItemInLoadout.Hook(GetItemInLoadout, HookMode.Post);
         _inventoryHooksRegistered = true;
 
-        Logger.LogInformation(
-            "[BotInventory] Loaded CEconItemView bridge. Bot owners use controller/inventory handles; BotHider is not required."
-        );
-    }
-
-    private static void ReconcileAgentVoiceIdentities()
-    {
-        foreach (var player in Utilities.GetPlayers())
-            AgentVoiceSync.ReconcilePlayer(player);
     }
 
     private void OnControllerEntityDeleted(CEntityInstance entity)

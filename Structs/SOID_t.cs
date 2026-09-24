@@ -7,7 +7,6 @@ using System.Runtime.InteropServices;
 
 namespace InventorySimulator;
 
-// Thanks to @samyycX.
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct SOID_t
 {
